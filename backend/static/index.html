@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Receipt Tracker</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <header>
+      <div class="header-row">
+        <div>
+          <h1>Receipt Tracker</h1>
+          <p>Upload receipts, fix parsed data, and track grocery prices over time.</p>
+        </div>
+        <nav class="app-nav" aria-label="Main views">
+          <button type="button" class="nav-btn active" data-view="receipts">Receipts</button>
+          <button type="button" class="nav-btn" data-view="prices">Price Tracker</button>
+        </nav>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel sidebar">
+        <div id="sidebar-receipts">
+          <h2>Upload receipt</h2>
+          <form id="upload-form">
+            <input type="file" id="receipt-file" accept="image/*" capture="environment" required />
+            <button type="submit" id="upload-btn">Parse &amp; save</button>
+          </form>
+          <p id="upload-status" class="status"></p>
+          <h2>Receipts</h2>
+          <ul id="receipt-list" class="list"></ul>
+        </div>
+
+        <div id="sidebar-prices" class="hidden">
+          <h2>Track prices</h2>
+          <input type="search" id="product-search" placeholder="Search groceries..." />
+          <ul id="product-list" class="list"></ul>
+        </div>
+      </section>
+
+      <section class="panel main-panel">
+        <div id="empty-state">
+          <h2 id="empty-title">Select a receipt</h2>
+          <p id="empty-text">Choose a receipt from the list or upload a new one.</p>
+        </div>
+
+        <div id="receipt-detail" class="hidden">
+          <div class="detail-header">
+            <div class="detail-info">
+              <div id="detail-view">
+                <h2 id="detail-store">Store</h2>
+                <p id="detail-meta"></p>
+              </div>
+              <form id="receipt-edit-form" class="hidden edit-form">
+                <label>
+                  Store
+                  <input type="text" id="edit-store" />
+                </label>
+                <label>
+                  Date
+                  <input type="date" id="edit-date" />
+                </label>
+                <label>
+                  Total
+                  <input type="number" id="edit-total" step="0.01" min="0" />
+                </label>
+                <div class="inline-actions">
+                  <button type="submit">Save receipt</button>
+                  <button type="button" id="cancel-receipt-edit" class="secondary">Cancel</button>
+                </div>
+              </form>
+            </div>
+            <img id="detail-image" alt="Receipt preview" />
+          </div>
+
+          <div id="validation-banner" class="validation-banner hidden"></div>
+
+          <div class="toolbar">
+            <button type="button" id="edit-receipt-btn" class="secondary">Edit receipt</button>
+            <button type="button" id="toggle-items-edit-btn" class="secondary">Edit all items</button>
+            <button type="button" id="reparse-btn" class="secondary">Re-parse</button>
+            <button type="button" id="delete-receipt-btn" class="danger">Delete receipt</button>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Qty</th>
+                <th>Unit</th>
+                <th>Total</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="detail-items"></tbody>
+          </table>
+
+          <form id="add-item-form" class="add-item-form">
+            <h3>Add line item</h3>
+            <div class="add-item-grid">
+              <input type="text" id="new-item-name" placeholder="Item name" required />
+              <input type="number" id="new-item-qty" placeholder="Qty" value="1" step="0.01" min="0" required />
+              <input type="number" id="new-item-unit" placeholder="Unit $" step="0.01" min="0" />
+              <input type="number" id="new-item-total" placeholder="Line $" step="0.01" min="0" />
+              <button type="submit">Add</button>
+            </div>
+          </form>
+        </div>
+
+        <div id="product-panel" class="hidden">
+          <div class="product-header">
+            <div>
+              <h2 id="product-title">Product</h2>
+              <p id="product-subtitle" class="meta"></p>
+            </div>
+            <button type="button" id="back-to-receipt" class="secondary hidden">← Back to receipt</button>
+          </div>
+
+          <div id="stats-grid" class="stats-grid"></div>
+
+          <div class="chart-wrap">
+            <canvas id="price-chart"></canvas>
+          </div>
+
+          <h3>Price changes</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Period</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Change</th>
+              </tr>
+            </thead>
+            <tbody id="change-rows"></tbody>
+          </table>
+
+          <h3>Purchase history</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Price</th>
+                <th>Qty</th>
+                <th>Receipt</th>
+              </tr>
+            </thead>
+            <tbody id="history-rows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
