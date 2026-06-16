@@ -14,6 +14,7 @@ class Receipt(Base):
     purchase_date: Mapped[date | None] = mapped_column(Date)
     total: Mapped[float | None] = mapped_column(Float)
     image_path: Mapped[str] = mapped_column(String(500))
+    image_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     raw_parse_json: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -30,6 +31,19 @@ class Product(Base):
     category: Mapped[str | None] = mapped_column(String(100))
 
     line_items: Mapped[list["LineItem"]] = relationship(back_populates="product")
+    aliases: Mapped[list["ProductAlias"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan"
+    )
+
+
+class ProductAlias(Base):
+    __tablename__ = "product_aliases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
+    alias: Mapped[str] = mapped_column(String(300), unique=True, index=True)
+
+    product: Mapped["Product"] = relationship(back_populates="aliases")
 
 
 class LineItem(Base):

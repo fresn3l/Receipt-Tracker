@@ -1,25 +1,12 @@
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from backend.models import LineItem, Product, Receipt
-from backend.parser import normalize_product_name
+from backend.models import LineItem, Receipt
+from backend.product_service import resolve_product, set_product_category
 from backend.schemas import ParsedReceipt, ReceiptDetail
 from backend.validation import validate_receipt
-
-
-def get_or_create_product(db: Session, raw_name: str) -> Product:
-    canonical = normalize_product_name(raw_name)
-    product = db.scalar(
-        select(Product).where(func.lower(Product.canonical_name) == canonical.lower())
-    )
-    if product:
-        return product
-    product = Product(canonical_name=canonical)
-    db.add(product)
-    db.flush()
-    return product
 
 
 def clear_line_items(db: Session, receipt: Receipt) -> None:
@@ -42,7 +29,9 @@ def apply_parsed_data(
     clear_line_items(db, receipt)
 
     for item in parsed.line_items:
-        product = get_or_create_product(db, item.name)
+        product = resolve_product(db, item.name)
+        if item.category and not product.category:
+            set_product_category(db, product, item.category)
         db.add(
             LineItem(
                 receipt_id=receipt.id,
@@ -64,7 +53,7 @@ def load_receipt(db: Session, receipt_id: int) -> Receipt | None:
     )
 
 
-def build_receipt_detail(receipt: Receipt) -> ReceiptDetail:
+def build_receipt_detail(receipt: Receipt, possible_duplicate_ids: list[int] | None = None) -> ReceiptDetail:
     validation = validate_receipt(receipt.total, receipt.line_items)
     return ReceiptDetail(
         id=receipt.id,
@@ -75,6 +64,7 @@ def build_receipt_detail(receipt: Receipt) -> ReceiptDetail:
         created_at=receipt.created_at,
         line_items=receipt.line_items,
         validation=validation,
+        possible_duplicate_ids=possible_duplicate_ids or [],
     )
 
 

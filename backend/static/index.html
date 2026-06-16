@@ -12,11 +12,12 @@
       <div class="header-row">
         <div>
           <h1>Receipt Tracker</h1>
-          <p>Upload receipts, fix parsed data, and track grocery prices over time.</p>
+          <p>Upload receipts, clean product data, and track grocery prices and spending.</p>
         </div>
         <nav class="app-nav" aria-label="Main views">
           <button type="button" class="nav-btn active" data-view="receipts">Receipts</button>
           <button type="button" class="nav-btn" data-view="prices">Price Tracker</button>
+          <button type="button" class="nav-btn" data-view="spending">Spending</button>
         </nav>
       </div>
     </header>
@@ -37,7 +38,18 @@
         <div id="sidebar-prices" class="hidden">
           <h2>Track prices</h2>
           <input type="search" id="product-search" placeholder="Search groceries..." />
-          <ul id="product-list" class="list"></ul>
+          <div class="merge-toolbar">
+            <button type="button" id="merge-selected-btn" class="secondary small" disabled>Merge selected</button>
+            <button type="button" id="load-suggestions-btn" class="secondary small">Find duplicates</button>
+            <button type="button" id="ai-suggestions-btn" class="secondary small">AI suggest</button>
+          </div>
+          <ul id="merge-suggestions" class="suggestion-list"></ul>
+          <ul id="product-list" class="list product-select-list"></ul>
+        </div>
+
+        <div id="sidebar-spending" class="hidden">
+          <h2>Spending</h2>
+          <p class="meta">Overview of grocery spend across trips, stores, and categories.</p>
         </div>
       </section>
 
@@ -55,18 +67,9 @@
                 <p id="detail-meta"></p>
               </div>
               <form id="receipt-edit-form" class="hidden edit-form">
-                <label>
-                  Store
-                  <input type="text" id="edit-store" />
-                </label>
-                <label>
-                  Date
-                  <input type="date" id="edit-date" />
-                </label>
-                <label>
-                  Total
-                  <input type="number" id="edit-total" step="0.01" min="0" />
-                </label>
+                <label>Store <input type="text" id="edit-store" /></label>
+                <label>Date <input type="date" id="edit-date" /></label>
+                <label>Total <input type="number" id="edit-total" step="0.01" min="0" /></label>
                 <div class="inline-actions">
                   <button type="submit">Save receipt</button>
                   <button type="button" id="cancel-receipt-edit" class="secondary">Cancel</button>
@@ -76,6 +79,7 @@
             <img id="detail-image" alt="Receipt preview" />
           </div>
 
+          <div id="duplicate-banner" class="validation-banner hidden"></div>
           <div id="validation-banner" class="validation-banner hidden"></div>
 
           <div class="toolbar">
@@ -87,13 +91,7 @@
 
           <table>
             <thead>
-              <tr>
-                <th>Item</th>
-                <th>Qty</th>
-                <th>Unit</th>
-                <th>Total</th>
-                <th></th>
-              </tr>
+              <tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th><th></th></tr>
             </thead>
             <tbody id="detail-items"></tbody>
           </table>
@@ -119,37 +117,47 @@
             <button type="button" id="back-to-receipt" class="secondary hidden">← Back to receipt</button>
           </div>
 
-          <div id="stats-grid" class="stats-grid"></div>
+          <form id="category-form" class="category-form">
+            <label>
+              Category
+              <select id="product-category"></select>
+            </label>
+            <button type="submit" class="secondary small">Save category</button>
+          </form>
 
-          <div class="chart-wrap">
-            <canvas id="price-chart"></canvas>
-          </div>
+          <div id="stats-grid" class="stats-grid"></div>
+          <div class="chart-wrap"><canvas id="price-chart"></canvas></div>
 
           <h3>Price changes</h3>
           <table>
-            <thead>
-              <tr>
-                <th>Period</th>
-                <th>From</th>
-                <th>To</th>
-                <th>Change</th>
-              </tr>
-            </thead>
+            <thead><tr><th>Period</th><th>From</th><th>To</th><th>Change</th></tr></thead>
             <tbody id="change-rows"></tbody>
           </table>
 
           <h3>Purchase history</h3>
           <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Price</th>
-                <th>Qty</th>
-                <th>Receipt</th>
-              </tr>
-            </thead>
+            <thead><tr><th>Date</th><th>Price</th><th>Qty</th><th>Receipt</th></tr></thead>
             <tbody id="history-rows"></tbody>
           </table>
+        </div>
+
+        <div id="spending-panel" class="hidden">
+          <h2>Spending overview</h2>
+          <div id="spending-stats" class="stats-grid"></div>
+          <div class="spending-charts">
+            <div class="chart-card">
+              <h3>By category</h3>
+              <div class="chart-wrap short"><canvas id="category-chart"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h3>By store</h3>
+              <div class="chart-wrap short"><canvas id="store-chart"></canvas></div>
+            </div>
+          </div>
+          <div class="chart-card">
+            <h3>Monthly grocery spend</h3>
+            <div class="chart-wrap"><canvas id="monthly-chart"></canvas></div>
+          </div>
         </div>
       </section>
     </main>

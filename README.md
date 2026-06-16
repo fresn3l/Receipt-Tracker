@@ -27,6 +27,21 @@ Personal, local grocery receipt tracker. Upload receipt photos, extract line ite
 - Rate-of-change table between consecutive purchases
 - Purchase history with links back to source receipts
 
+## Sprint 4 features
+
+- **Merge products** — combine duplicate grocery items across receipts
+- **Product aliases** — receipt text maps to canonical products after merge
+- **Merge suggestions** — fuzzy name matching + optional AI suggestions
+- **Duplicate receipt detection** — blocks identical images; warns on same store/date/total
+- **Orphan cleanup** — removes unused products after deletes/merges
+
+## Sprint 5 features
+
+- **Auto-categorize** items during receipt parsing (Produce, Dairy, etc.)
+- **Manual category edit** on product detail
+- **Spending tab** — total spent, avg trip, items per trip
+- Charts: spend by category, by store, monthly trend
+
 ## Setup
 
 1. Create a virtual environment and install dependencies:
@@ -73,12 +88,18 @@ Both are gitignored and stay on your machine.
 | PATCH | `/api/receipts/{id}/items/{item_id}` | Update a line item |
 | DELETE | `/api/receipts/{id}/items/{item_id}` | Delete a line item |
 | GET | `/api/products` | Products with stats (`?q=` search) |
+| GET | `/api/products/merge-suggestions` | Fuzzy or AI merge suggestions |
+| POST | `/api/products/merge` | Merge products into one |
+| POST | `/api/products/cleanup-orphans` | Remove unused products |
+| GET | `/api/products/categories` | Grocery category list |
 | GET | `/api/products/{id}` | Full product detail with analytics |
+| PATCH | `/api/products/{id}` | Update name or category |
 | GET | `/api/products/{id}/price-history` | Price history for charts |
+| GET | `/api/spending/overview` | Spending summary and chart data |
 
 ## Next steps
 
-- Smarter product name matching across stores
-- Merge duplicate products
-- Category tagging and spend breakdowns
-- Purchase frequency insights
+- Price alerts and watchlist
+- Unit normalization ($/oz, $/lb)
+- CSV export / backup
+- Batch receipt upload

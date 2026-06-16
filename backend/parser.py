@@ -20,10 +20,13 @@ Return JSON with this exact shape:
       "name": "item description as printed",
       "quantity": 1,
       "unit_price": 3.99,
-      "line_total": 3.99
+      "line_total": 3.99,
+      "category": "Produce"
     }
   ]
 }
+
+Categories (pick the best fit): Produce, Dairy, Meat, Seafood, Bakery, Frozen, Beverages, Snacks, Pantry, Household, Personal Care, Other.
 
 Rules:
 - Include only actual purchased items, not subtotals, tax, payment lines, or discounts unless they are line items.
@@ -32,7 +35,8 @@ Rules:
 - line_total is the amount charged for that line.
 - purchase_date should be ISO format if visible.
 - total is the final amount paid if visible.
-- Return valid JSON only."""
+- Return valid JSON only.
+- category should be one of the listed categories for each line item."""
 
 
 def _encode_image(image_path: Path) -> str:

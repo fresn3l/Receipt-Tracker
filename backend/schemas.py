@@ -8,6 +8,7 @@ class ParsedLineItem(BaseModel):
     quantity: float = 1.0
     unit_price: float | None = None
     line_total: float | None = None
+    category: str | None = None
 
 
 class ParsedReceipt(BaseModel):
@@ -44,6 +45,7 @@ class ReceiptSummary(BaseModel):
     created_at: datetime
     item_count: int
     has_warning: bool
+    possible_duplicate: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -57,6 +59,7 @@ class ReceiptDetail(BaseModel):
     created_at: datetime
     line_items: list[LineItemOut]
     validation: ReceiptValidation
+    possible_duplicate_ids: list[int] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -128,5 +131,54 @@ class ProductDetail(BaseModel):
     id: int
     canonical_name: str
     category: str | None
+    aliases: list[str] = Field(default_factory=list)
     analytics: ProductAnalytics
     history: list[PricePoint]
+
+
+class ProductUpdate(BaseModel):
+    canonical_name: str | None = None
+    category: str | None = None
+
+
+class ProductMergeRequest(BaseModel):
+    target_id: int
+    source_ids: list[int]
+
+
+class MergeSuggestion(BaseModel):
+    product_ids: list[int]
+    names: list[str]
+    score: float
+    reason: str
+
+
+class CategorySpend(BaseModel):
+    category: str
+    total: float
+
+
+class StoreSpend(BaseModel):
+    store: str
+    total: float
+    trip_count: int
+
+
+class MonthlySpend(BaseModel):
+    month: str
+    total: float
+    trip_count: int
+
+
+class SpendingSummary(BaseModel):
+    receipt_count: int
+    total_spent: float
+    avg_trip_total: float | None
+    avg_items_per_trip: float | None
+
+
+class SpendingOverview(BaseModel):
+    summary: SpendingSummary
+    by_category: list[CategorySpend]
+    by_store: list[StoreSpend]
+    monthly: list[MonthlySpend]

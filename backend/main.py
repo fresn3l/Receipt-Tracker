@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.database import Base, engine
+from backend.migrations import run_migrations
 from backend.routes import router
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -19,6 +20,7 @@ if STATIC_DIR.exists():
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
+    run_migrations()
 
 
 @app.get("/")

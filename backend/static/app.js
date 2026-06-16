@@ -1,5 +1,6 @@
 const receiptList = document.getElementById("receipt-list");
 const productList = document.getElementById("product-list");
+const mergeSuggestions = document.getElementById("merge-suggestions");
 const uploadForm = document.getElementById("upload-form");
 const uploadStatus = document.getElementById("upload-status");
 const uploadBtn = document.getElementById("upload-btn");
@@ -8,24 +9,34 @@ const emptyTitle = document.getElementById("empty-title");
 const emptyText = document.getElementById("empty-text");
 const receiptDetail = document.getElementById("receipt-detail");
 const productPanel = document.getElementById("product-panel");
+const spendingPanel = document.getElementById("spending-panel");
 const validationBanner = document.getElementById("validation-banner");
+const duplicateBanner = document.getElementById("duplicate-banner");
 const detailView = document.getElementById("detail-view");
 const receiptEditForm = document.getElementById("receipt-edit-form");
 const addItemForm = document.getElementById("add-item-form");
+const categoryForm = document.getElementById("category-form");
 const sidebarReceipts = document.getElementById("sidebar-receipts");
 const sidebarPrices = document.getElementById("sidebar-prices");
+const sidebarSpending = document.getElementById("sidebar-spending");
 const productSearch = document.getElementById("product-search");
 const backToReceiptBtn = document.getElementById("back-to-receipt");
 const toggleItemsEditBtn = document.getElementById("toggle-items-edit-btn");
+const mergeSelectedBtn = document.getElementById("merge-selected-btn");
 
 let priceChart = null;
+let categoryChart = null;
+let storeChart = null;
+let monthlyChart = null;
 let selectedReceiptId = null;
 let selectedProductId = null;
+let selectedProductIds = new Set();
 let currentReceipt = null;
+let currentProduct = null;
 let editingItemId = null;
 let bulkEditMode = false;
 let activeView = "receipts";
-let openedProductFromReceipt = false;
+let groceryCategories = [];
 
 function money(value) {
   if (value == null) return "—";
@@ -74,6 +85,10 @@ function escapeAttr(value) {
   return String(value).replaceAll('"', "&quot;");
 }
 
+function updateMergeButton() {
+  mergeSelectedBtn.disabled = selectedProductIds.size < 2;
+}
+
 function setView(view) {
   activeView = view;
   document.querySelectorAll(".nav-btn").forEach((btn) => {
@@ -81,30 +96,31 @@ function setView(view) {
   });
   sidebarReceipts.classList.toggle("hidden", view !== "receipts");
   sidebarPrices.classList.toggle("hidden", view !== "prices");
+  sidebarSpending.classList.toggle("hidden", view !== "spending");
 
-  if (view === "prices") {
-    receiptDetail.classList.add("hidden");
-    emptyState.classList.add("hidden");
-    if (selectedProductId) {
-      productPanel.classList.remove("hidden");
-    } else {
-      productPanel.classList.add("hidden");
-      emptyState.classList.remove("hidden");
-      emptyTitle.textContent = "Track grocery prices";
-      emptyText.textContent = "Search and select a product to see price trends, averages, and rate of change.";
-    }
-    loadProducts().catch((error) => setStatus(error.message, "error"));
-  } else {
-    productPanel.classList.add("hidden");
-    if (selectedReceiptId) {
-      receiptDetail.classList.remove("hidden");
-      emptyState.classList.add("hidden");
-    } else {
-      receiptDetail.classList.add("hidden");
+  receiptDetail.classList.add("hidden");
+  productPanel.classList.add("hidden");
+  spendingPanel.classList.add("hidden");
+  emptyState.classList.add("hidden");
+
+  if (view === "receipts") {
+    if (selectedReceiptId) receiptDetail.classList.remove("hidden");
+    else {
       emptyState.classList.remove("hidden");
       emptyTitle.textContent = "Select a receipt";
       emptyText.textContent = "Choose a receipt from the list or upload a new one.";
     }
+  } else if (view === "prices") {
+    if (selectedProductId) productPanel.classList.remove("hidden");
+    else {
+      emptyState.classList.remove("hidden");
+      emptyTitle.textContent = "Track grocery prices";
+      emptyText.textContent = "Search and select a product, or merge duplicates to clean your data.";
+    }
+    loadProducts().catch((error) => setStatus(error.message, "error"));
+  } else if (view === "spending") {
+    spendingPanel.classList.remove("hidden");
+    loadSpending().catch((error) => setStatus(error.message, "error"));
   }
 }
 
@@ -114,16 +130,24 @@ function renderValidation(validation) {
     validationBanner.textContent = "";
     return;
   }
-
   validationBanner.classList.remove("hidden");
   validationBanner.className = "validation-banner warning";
   const parts = [...validation.warnings];
   if (validation.items_sum != null && validation.receipt_total != null) {
-    parts.unshift(
-      `Items: ${money(validation.items_sum)} · Receipt: ${money(validation.receipt_total)}`
-    );
+    parts.unshift(`Items: ${money(validation.items_sum)} · Receipt: ${money(validation.receipt_total)}`);
   }
   validationBanner.textContent = parts.join(" ");
+}
+
+function renderDuplicateWarning(ids) {
+  if (!ids || !ids.length) {
+    duplicateBanner.classList.add("hidden");
+    duplicateBanner.textContent = "";
+    return;
+  }
+  duplicateBanner.classList.remove("hidden");
+  duplicateBanner.className = "validation-banner warning";
+  duplicateBanner.textContent = `Possible duplicate of receipt(s): ${ids.map((id) => `#${id}`).join(", ")}. Same store, date, and total.`;
 }
 
 function setReceiptEditMode(enabled) {
@@ -144,7 +168,6 @@ function wireLineCalc(row) {
   const unit = row.querySelector('[data-field="unit_price"]');
   const total = row.querySelector('[data-field="line_total"]');
   if (!qty || !unit || !total) return;
-
   const updateTotal = () => {
     const q = Number(qty.value);
     const u = Number(unit.value);
@@ -159,21 +182,20 @@ function wireLineCalc(row) {
 async function loadReceipts() {
   const receipts = await api("/api/receipts");
   receiptList.innerHTML = "";
-
   if (!receipts.length) {
     receiptList.innerHTML = "<li class='meta'>No receipts yet.</li>";
     return;
   }
-
   for (const receipt of receipts) {
     const li = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
     button.className = receipt.id === selectedReceiptId ? "active" : "";
     const warning = receipt.has_warning ? " · ⚠ check totals" : "";
+    const duplicate = receipt.possible_duplicate ? " · ⚠ possible duplicate" : "";
     button.innerHTML = `
       <strong>${receipt.store_name || "Unknown store"}</strong>
-      <span class="meta">${formatDate(receipt.purchase_date)} · ${receipt.item_count} items · ${money(receipt.total)}${warning}</span>
+      <span class="meta">${formatDate(receipt.purchase_date)} · ${receipt.item_count} items · ${money(receipt.total)}${warning}${duplicate}</span>
     `;
     button.addEventListener("click", () => showReceipt(receipt.id));
     li.appendChild(button);
@@ -186,14 +208,22 @@ async function loadProducts() {
   const path = query ? `/api/products?q=${encodeURIComponent(query)}` : "/api/products";
   const products = await api(path);
   productList.innerHTML = "";
-
   if (!products.length) {
     productList.innerHTML = "<li class='meta'>No products found.</li>";
+    updateMergeButton();
     return;
   }
-
   for (const product of products) {
     const li = document.createElement("li");
+    li.className = "product-row";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = selectedProductIds.has(product.id);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedProductIds.add(product.id);
+      else selectedProductIds.delete(product.id);
+      updateMergeButton();
+    });
     const button = document.createElement("button");
     button.type = "button";
     button.className = product.id === selectedProductId ? "active" : "";
@@ -201,14 +231,55 @@ async function loadProducts() {
       product.change_since_previous_pct != null
         ? ` · <span class="${pctClass(product.change_since_previous_pct)}">${pct(product.change_since_previous_pct)}</span>`
         : "";
+    const category = product.category ? ` · ${product.category}` : "";
     button.innerHTML = `
       <strong>${product.canonical_name}</strong>
-      <span class="meta">${product.purchase_count} buys · latest ${money(product.latest_price)} · avg ${money(product.avg_price)}${change}</span>
+      <span class="meta">${product.purchase_count} buys · latest ${money(product.latest_price)} · avg ${money(product.avg_price)}${category}${change}</span>
     `;
     button.addEventListener("click", () => showProduct(product.id, { fromReceipt: false }));
+    li.appendChild(checkbox);
     li.appendChild(button);
     productList.appendChild(li);
   }
+  updateMergeButton();
+}
+
+async function loadMergeSuggestions(useLlm = false) {
+  mergeSuggestions.innerHTML = "<li class='meta'>Loading suggestions...</li>";
+  const path = useLlm ? "/api/products/merge-suggestions?use_llm=true" : "/api/products/merge-suggestions";
+  const suggestions = await api(path);
+  mergeSuggestions.innerHTML = "";
+  if (!suggestions.length) {
+    mergeSuggestions.innerHTML = "<li class='meta'>No merge suggestions found.</li>";
+    return;
+  }
+  for (const suggestion of suggestions) {
+    const li = document.createElement("li");
+    li.className = "suggestion-item";
+    li.innerHTML = `
+      <span>${suggestion.names.join(" + ")} <span class="meta">(${suggestion.reason}, ${Math.round(suggestion.score * 100)}%)</span></span>
+      <button type="button" class="secondary small">Merge</button>
+    `;
+    li.querySelector("button").addEventListener("click", () => {
+      mergeProducts(suggestion.product_ids[0], suggestion.product_ids.slice(1));
+    });
+    mergeSuggestions.appendChild(li);
+  }
+}
+
+async function mergeProducts(targetId, sourceIds) {
+  if (!confirm(`Merge ${sourceIds.length} product(s) into the selected target?`)) return;
+  const product = await api("/api/products/merge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target_id: targetId, source_ids: sourceIds }),
+  });
+  selectedProductIds.clear();
+  selectedProductId = product.id;
+  await loadProducts();
+  await loadMergeSuggestions();
+  await showProduct(product.id, { fromReceipt: false });
+  setStatus("Products merged.", "success");
 }
 
 function renderEditableRow(item) {
@@ -237,10 +308,7 @@ function renderEditableRow(item) {
 }
 
 function renderLineItemRow(item) {
-  if (bulkEditMode || editingItemId === item.id) {
-    return renderEditableRow(item);
-  }
-
+  if (bulkEditMode || editingItemId === item.id) return renderEditableRow(item);
   const row = document.createElement("tr");
   const nameCell = document.createElement("td");
   const link = document.createElement("button");
@@ -251,7 +319,6 @@ function renderLineItemRow(item) {
     link.addEventListener("click", () => showProduct(item.product_id, { fromReceipt: true, name: item.raw_name }));
   }
   nameCell.appendChild(link);
-
   const actions = document.createElement("td");
   actions.className = "row-actions";
   actions.innerHTML = `
@@ -263,7 +330,6 @@ function renderLineItemRow(item) {
     renderReceiptItems(currentReceipt.line_items);
   });
   actions.querySelector(".delete-item-btn").addEventListener("click", () => deleteLineItem(item.id));
-
   row.appendChild(nameCell);
   row.innerHTML += `
     <td class="num">${item.quantity}</td>
@@ -278,9 +344,7 @@ function renderLineItemRow(item) {
 function renderReceiptItems(items) {
   const tbody = document.getElementById("detail-items");
   tbody.innerHTML = "";
-  for (const item of items) {
-    tbody.appendChild(renderLineItemRow(item));
-  }
+  for (const item of items) tbody.appendChild(renderLineItemRow(item));
 }
 
 async function showReceipt(receiptId) {
@@ -288,21 +352,15 @@ async function showReceipt(receiptId) {
   editingItemId = null;
   setReceiptEditMode(false);
   currentReceipt = await api(`/api/receipts/${receiptId}`);
-
   setView("receipts");
-  emptyState.classList.add("hidden");
-  productPanel.classList.add("hidden");
-  receiptDetail.classList.remove("hidden");
-
   document.getElementById("detail-store").textContent = currentReceipt.store_name || "Unknown store";
   document.getElementById("detail-meta").textContent = `${formatDate(currentReceipt.purchase_date)} · Total ${money(currentReceipt.total)}`;
   document.getElementById("detail-image").src = `/api/receipts/${receiptId}/image?t=${Date.now()}`;
-
   document.getElementById("edit-store").value = currentReceipt.store_name || "";
   document.getElementById("edit-date").value = toInputDate(currentReceipt.purchase_date);
   document.getElementById("edit-total").value = currentReceipt.total ?? "";
-
   renderValidation(currentReceipt.validation);
+  renderDuplicateWarning(currentReceipt.possible_duplicate_ids);
   renderReceiptItems(currentReceipt.line_items);
   await loadReceipts();
 }
@@ -311,24 +369,17 @@ async function saveLineItem(itemId, row) {
   const payload = {};
   for (const input of row.querySelectorAll(".cell-input")) {
     const field = input.dataset.field;
-    if (field === "raw_name") {
-      payload.raw_name = input.value.trim();
-    } else {
-      payload[field] = input.value === "" ? null : Number(input.value);
-    }
+    payload[field] = field === "raw_name" ? input.value.trim() : input.value === "" ? null : Number(input.value);
   }
-
   if (!payload.raw_name) {
     alert("Item name is required.");
     return;
   }
-
   await api(`/api/receipts/${selectedReceiptId}/items/${itemId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-
   if (!bulkEditMode) editingItemId = null;
   currentReceipt = await api(`/api/receipts/${selectedReceiptId}`);
   renderValidation(currentReceipt.validation);
@@ -342,159 +393,146 @@ async function deleteLineItem(itemId) {
 }
 
 function renderStatCard(label, value, subtext = "", valueClass = "") {
-  return `
-    <article class="stat-card">
-      <span class="stat-label">${label}</span>
-      <strong class="stat-value ${valueClass}">${value}</strong>
-      ${subtext ? `<span class="stat-sub">${subtext}</span>` : ""}
-    </article>
-  `;
+  return `<article class="stat-card"><span class="stat-label">${label}</span><strong class="stat-value ${valueClass}">${value}</strong>${subtext ? `<span class="stat-sub">${subtext}</span>` : ""}</article>`;
+}
+
+async function ensureCategories() {
+  if (!groceryCategories.length) groceryCategories = await api("/api/products/categories");
+  const select = document.getElementById("product-category");
+  select.innerHTML = `<option value="">Uncategorized</option>${groceryCategories.map((cat) => `<option value="${cat}">${cat}</option>`).join("")}`;
 }
 
 function renderProductAnalytics(product) {
+  currentProduct = product;
   const { analytics: a, history } = product;
-
   document.getElementById("product-title").textContent = product.canonical_name;
-  document.getElementById("product-subtitle").textContent = product.category
-    ? `Category: ${product.category}`
-    : `${a.purchase_count} purchases tracked`;
-
-  const statsGrid = document.getElementById("stats-grid");
-  statsGrid.innerHTML = [
+  const aliasText = product.aliases?.length ? ` · aliases: ${product.aliases.join(", ")}` : "";
+  document.getElementById("product-subtitle").textContent = `${product.category || "Uncategorized"}${aliasText}`;
+  document.getElementById("product-category").value = product.category || "";
+  document.getElementById("stats-grid").innerHTML = [
     renderStatCard("Latest price", money(a.latest_price)),
     renderStatCard("Average", money(a.avg_price)),
     renderStatCard("Low / High", `${money(a.min_price)} / ${money(a.max_price)}`),
-    renderStatCard(
-      "Since first buy",
-      pct(a.change_since_first_pct),
-      a.first_price != null ? `from ${money(a.first_price)}` : "",
-      pctClass(a.change_since_first_pct)
-    ),
-    renderStatCard(
-      "Since last buy",
-      pct(a.change_since_previous_pct),
-      "",
-      pctClass(a.change_since_previous_pct)
-    ),
-    renderStatCard(
-      "Buy frequency",
-      a.avg_days_between_purchases != null ? `~${a.avg_days_between_purchases} days` : "—",
-      "average gap between purchases"
-    ),
+    renderStatCard("Since first buy", pct(a.change_since_first_pct), a.first_price != null ? `from ${money(a.first_price)}` : "", pctClass(a.change_since_first_pct)),
+    renderStatCard("Since last buy", pct(a.change_since_previous_pct), "", pctClass(a.change_since_previous_pct)),
+    renderStatCard("Buy frequency", a.avg_days_between_purchases != null ? `~${a.avg_days_between_purchases} days` : "—", "average gap between purchases"),
   ].join("");
 
   const labels = history.map((point) => formatDate(point.purchase_date));
   const prices = history.map((point) => point.effective_price);
   const avgLine = a.avg_price != null ? history.map(() => a.avg_price) : [];
-
   if (priceChart) priceChart.destroy();
   priceChart = new Chart(document.getElementById("price-chart"), {
     type: "line",
     data: {
       labels,
       datasets: [
-        {
-          label: "Unit price",
-          data: prices,
-          borderColor: "#5eead4",
-          backgroundColor: "rgba(94, 234, 212, 0.12)",
-          tension: 0.2,
-          fill: true,
-          pointRadius: 4,
-        },
-        {
-          label: "Average",
-          data: avgLine,
-          borderColor: "#fbbf24",
-          borderDash: [6, 4],
-          pointRadius: 0,
-          fill: false,
-        },
+        { label: "Unit price", data: prices, borderColor: "#5eead4", backgroundColor: "rgba(94, 234, 212, 0.12)", tension: 0.2, fill: true, pointRadius: 4 },
+        { label: "Average", data: avgLine, borderColor: "#fbbf24", borderDash: [6, 4], pointRadius: 0, fill: false },
       ],
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: "#e8eef7" } },
-        tooltip: {
-          callbacks: {
-            label(context) {
-              return `${context.dataset.label}: ${money(context.parsed.y)}`;
-            },
-          },
-        },
-      },
-      scales: {
-        x: { ticks: { color: "#9fb0c7" }, grid: { color: "#2d3a4d" } },
-        y: {
-          ticks: {
-            color: "#9fb0c7",
-            callback: (value) => `$${value}`,
-          },
-          grid: { color: "#2d3a4d" },
-        },
-      },
-    },
+    options: chartOptions("Price"),
   });
 
   const changeRows = document.getElementById("change-rows");
-  changeRows.innerHTML = "";
-  if (!a.changes.length) {
-    changeRows.innerHTML = "<tr><td colspan='4' class='meta'>Need at least two purchases to compute changes.</td></tr>";
-  } else {
-    for (const change of [...a.changes].reverse()) {
-      const row = document.createElement("tr");
-      row.innerHTML = `
-        <td>${formatDate(change.from_date)} → ${formatDate(change.to_date)}</td>
-        <td class="num">${money(change.from_price)}</td>
-        <td class="num">${money(change.to_price)}</td>
-        <td class="num ${pctClass(change.change_pct)}">${pct(change.change_pct)}</td>
-      `;
-      changeRows.appendChild(row);
-    }
+  changeRows.innerHTML = !a.changes.length
+    ? "<tr><td colspan='4' class='meta'>Need at least two purchases to compute changes.</td></tr>"
+    : "";
+  for (const change of [...a.changes].reverse()) {
+    const row = document.createElement("tr");
+    row.innerHTML = `<td>${formatDate(change.from_date)} → ${formatDate(change.to_date)}</td><td class="num">${money(change.from_price)}</td><td class="num">${money(change.to_price)}</td><td class="num ${pctClass(change.change_pct)}">${pct(change.change_pct)}</td>`;
+    changeRows.appendChild(row);
   }
 
   const historyRows = document.getElementById("history-rows");
   historyRows.innerHTML = "";
   for (const point of [...history].reverse()) {
     const row = document.createElement("tr");
-    row.innerHTML = `
-      <td>${formatDate(point.purchase_date)}</td>
-      <td class="num">${money(point.effective_price)}</td>
-      <td class="num">${point.quantity}</td>
-      <td><button type="button" class="item-link view-receipt-btn" data-receipt-id="${point.receipt_id}">#${point.receipt_id}</button></td>
-    `;
+    row.innerHTML = `<td>${formatDate(point.purchase_date)}</td><td class="num">${money(point.effective_price)}</td><td class="num">${point.quantity}</td><td><button type="button" class="item-link view-receipt-btn">#${point.receipt_id}</button></td>`;
     row.querySelector(".view-receipt-btn").addEventListener("click", () => showReceipt(point.receipt_id));
     historyRows.appendChild(row);
   }
 }
 
+function chartOptions(yLabel = "") {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { labels: { color: "#e8eef7" } } },
+    scales: {
+      x: { ticks: { color: "#9fb0c7" }, grid: { color: "#2d3a4d" } },
+      y: { ticks: { color: "#9fb0c7", callback: (value) => (yLabel === "Price" || yLabel === "Spend" ? `$${value}` : value) }, grid: { color: "#2d3a4d" } },
+    },
+  };
+}
+
 async function showProduct(productId, options = {}) {
   const { fromReceipt = false, name = null } = options;
   selectedProductId = productId;
-  openedProductFromReceipt = fromReceipt;
-
+  await ensureCategories();
   const product = await api(`/api/products/${productId}`);
   if (name) product.canonical_name = name;
-
-  emptyState.classList.add("hidden");
-  receiptDetail.classList.add("hidden");
-  productPanel.classList.remove("hidden");
   backToReceiptBtn.classList.toggle("hidden", !fromReceipt);
-
   if (!fromReceipt) setView("prices");
+  else {
+    receiptDetail.classList.add("hidden");
+    productPanel.classList.remove("hidden");
+  }
   renderProductAnalytics(product);
   await loadProducts();
 }
 
-document.querySelectorAll(".nav-btn").forEach((btn) => {
-  btn.addEventListener("click", () => setView(btn.dataset.view));
-});
+async function loadSpending() {
+  const data = await api("/api/spending/overview");
+  const s = data.summary;
+  document.getElementById("spending-stats").innerHTML = [
+    renderStatCard("Total spent", money(s.total_spent)),
+    renderStatCard("Trips", String(s.receipt_count)),
+    renderStatCard("Avg trip", money(s.avg_trip_total)),
+    renderStatCard("Avg items / trip", s.avg_items_per_trip != null ? String(s.avg_items_per_trip) : "—"),
+  ].join("");
 
+  if (categoryChart) categoryChart.destroy();
+  categoryChart = new Chart(document.getElementById("category-chart"), {
+    type: "doughnut",
+    data: {
+      labels: data.by_category.map((entry) => entry.category),
+      datasets: [{ data: data.by_category.map((entry) => entry.total), backgroundColor: ["#5eead4", "#60a5fa", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#34d399", "#f87171"] }],
+    },
+    options: { plugins: { legend: { position: "bottom", labels: { color: "#e8eef7" } } } },
+  });
+
+  if (storeChart) storeChart.destroy();
+  storeChart = new Chart(document.getElementById("store-chart"), {
+    type: "bar",
+    data: {
+      labels: data.by_store.map((entry) => entry.store),
+      datasets: [{ label: "Spend", data: data.by_store.map((entry) => entry.total), backgroundColor: "#5eead4" }],
+    },
+    options: chartOptions("Spend"),
+  });
+
+  if (monthlyChart) monthlyChart.destroy();
+  monthlyChart = new Chart(document.getElementById("monthly-chart"), {
+    type: "line",
+    data: {
+      labels: data.monthly.map((entry) => entry.month),
+      datasets: [{ label: "Monthly spend", data: data.monthly.map((entry) => entry.total), borderColor: "#60a5fa", backgroundColor: "rgba(96, 165, 250, 0.15)", fill: true, tension: 0.2 }],
+    },
+    options: chartOptions("Spend"),
+  });
+}
+
+document.querySelectorAll(".nav-btn").forEach((btn) => btn.addEventListener("click", () => setView(btn.dataset.view)));
 document.getElementById("edit-receipt-btn").addEventListener("click", () => setReceiptEditMode(true));
 document.getElementById("cancel-receipt-edit").addEventListener("click", () => setReceiptEditMode(false));
 toggleItemsEditBtn.addEventListener("click", () => setBulkEditMode(!bulkEditMode));
+mergeSelectedBtn.addEventListener("click", () => {
+  const ids = [...selectedProductIds];
+  mergeProducts(ids[0], ids.slice(1));
+});
+document.getElementById("load-suggestions-btn").addEventListener("click", () => loadMergeSuggestions(false).catch((e) => setStatus(e.message, "error")));
+document.getElementById("ai-suggestions-btn").addEventListener("click", () => loadMergeSuggestions(true).catch((e) => setStatus(e.message, "error")));
 
 receiptEditForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -510,6 +548,18 @@ receiptEditForm.addEventListener("submit", async (event) => {
   });
   setReceiptEditMode(false);
   await showReceipt(selectedReceiptId);
+});
+
+categoryForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!selectedProductId) return;
+  await api(`/api/products/${selectedProductId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category: document.getElementById("product-category").value || null }),
+  });
+  await showProduct(selectedProductId, { fromReceipt: false });
+  setStatus("Category saved.", "success");
 });
 
 document.getElementById("reparse-btn").addEventListener("click", async () => {
@@ -530,8 +580,7 @@ document.getElementById("delete-receipt-btn").addEventListener("click", async ()
   selectedReceiptId = null;
   currentReceipt = null;
   setBulkEditMode(false);
-  receiptDetail.classList.add("hidden");
-  emptyState.classList.remove("hidden");
+  setView("receipts");
   await loadReceipts();
   setStatus("Receipt deleted.", "success");
 });
@@ -541,26 +590,20 @@ backToReceiptBtn.addEventListener("click", async () => {
   if (selectedReceiptId) await showReceipt(selectedReceiptId);
 });
 
-productSearch.addEventListener("input", () => {
-  loadProducts().catch((error) => setStatus(error.message, "error"));
-});
+productSearch.addEventListener("input", () => loadProducts().catch((error) => setStatus(error.message, "error")));
 
 addItemForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const unitValue = document.getElementById("new-item-unit").value;
-  const totalValue = document.getElementById("new-item-total").value;
-
   await api(`/api/receipts/${selectedReceiptId}/items`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       raw_name: document.getElementById("new-item-name").value.trim(),
       quantity: Number(document.getElementById("new-item-qty").value),
-      unit_price: unitValue === "" ? null : Number(unitValue),
-      line_total: totalValue === "" ? null : Number(totalValue),
+      unit_price: document.getElementById("new-item-unit").value === "" ? null : Number(document.getElementById("new-item-unit").value),
+      line_total: document.getElementById("new-item-total").value === "" ? null : Number(document.getElementById("new-item-total").value),
     }),
   });
-
   addItemForm.reset();
   document.getElementById("new-item-qty").value = "1";
   await showReceipt(selectedReceiptId);
@@ -579,20 +622,16 @@ function syncNewItemTotal() {
 
 uploadForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const fileInput = document.getElementById("receipt-file");
-  const file = fileInput.files[0];
+  const file = document.getElementById("receipt-file").files[0];
   if (!file) return;
-
   const formData = new FormData();
   formData.append("file", file);
-
   uploadBtn.disabled = true;
   setStatus("Parsing receipt with vision model...");
-
   try {
     const receipt = await api("/api/receipts/upload", { method: "POST", body: formData });
     setStatus("Receipt saved.", "success");
-    fileInput.value = "";
+    document.getElementById("receipt-file").value = "";
     await loadReceipts();
     await showReceipt(receipt.id);
   } catch (error) {
@@ -603,3 +642,4 @@ uploadForm.addEventListener("submit", async (event) => {
 });
 
 loadReceipts().catch((error) => setStatus(error.message, "error"));
+loadMergeSuggestions().catch(() => {});
