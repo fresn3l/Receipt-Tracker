@@ -73,6 +73,14 @@ Personal, local grocery receipt tracker. Upload receipt photos, extract line ite
 - **Product unit size** — edit package size and toggle per-unit price charts
 - **Import JSON** — restore from an exported backup (merge or replace)
 
+## Phase B — Harden
+
+- **Route modules** — API split into `backend/routes/` (receipts, products, spending, etc.)
+- **Integration tests** — API tests with isolated temp SQLite DB
+- **GitHub Actions CI** — runs `pytest` on push/PR to `main`
+- **Health check** — `GET /api/health` reports status and whether `OPENAI_API_KEY` is set
+- **Startup warning** — logs a clear message if the API key is missing
+
 ## Setup
 
 1. Create a virtual environment and install dependencies:
@@ -108,6 +116,7 @@ Both are gitignored and stay on your machine.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| GET | `/api/health` | App status and API key check |
 | POST | `/api/receipts/upload` | Upload and parse a receipt image |
 | POST | `/api/receipts/upload/batch` | Upload multiple receipt images |
 | GET | `/api/receipts` | List all receipts (`?review_only=true`) |
@@ -133,8 +142,11 @@ Both are gitignored and stay on your machine.
 pytest tests/ -q
 ```
 
+Unit tests cover analytics, validation, and store normalization. Integration tests (`tests/test_api.py`) exercise the HTTP API against an isolated temp database.
+
 ## Next steps
 
 - Category-level budgets in the UI
 - Price alert thresholds (customizable)
-- Batch re-parse for category backfill
+- Cheapest-store dashboard for watched items
+- Mobile layout pass
