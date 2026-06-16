@@ -486,6 +486,35 @@ td.num {
   margin-bottom: 1rem;
 }
 
+.import-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.import-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.import-check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+#mark-reviewed-btn.hidden {
+  display: none;
+}
+
 .inline-actions,
 .row-actions {
   display: flex;

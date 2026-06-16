@@ -53,6 +53,7 @@ class ReceiptSummary(BaseModel):
     has_warning: bool
     possible_duplicate: bool = False
     needs_review: bool = False
+    reviewed_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -66,6 +67,7 @@ class ReceiptDetail(BaseModel):
     created_at: datetime
     notes: str | None = None
     parse_confidence: float | None = None
+    reviewed_at: datetime | None = None
     line_items: list[LineItemOut]
     validation: ReceiptValidation
     possible_duplicate_ids: list[int] = Field(default_factory=list)
@@ -117,6 +119,7 @@ class PricePoint(BaseModel):
     quantity: float
     receipt_id: int
     effective_price: float | None = None
+    normalized_price: float | None = None
 
 
 class PriceChange(BaseModel):
@@ -243,3 +246,33 @@ class BudgetSettingsUpdate(BaseModel):
 class BatchUploadResult(BaseModel):
     saved: list[ReceiptDetail]
     failed: list[dict]
+
+
+class BulkReparseRequest(BaseModel):
+    receipt_ids: list[int] | None = None
+    missing_categories_only: bool = False
+
+
+class BulkReparseResult(BaseModel):
+    succeeded: list[int]
+    failed: list[dict]
+    total: int
+
+
+class ReparseCandidate(BaseModel):
+    id: int
+    store_name: str | None
+    purchase_date: date | None
+    missing_categories: bool
+    parse_confidence: float | None
+
+
+class ImportResult(BaseModel):
+    imported_receipts: int
+    imported_items: int
+    imported_products: int
+
+
+class ImportRequest(BaseModel):
+    data: dict
+    replace: bool = False

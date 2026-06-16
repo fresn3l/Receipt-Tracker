@@ -1,18 +1,24 @@
 import csv
 import io
 import json
-from datetime import date, datetime
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from backend.models import LineItem, Product, Receipt
+from backend.models import LineItem, Product, ProductAlias, Receipt
 
 
 def export_json(db: Session) -> dict:
     receipts = db.scalars(select(Receipt).options(selectinload(Receipt.line_items))).all()
     products = db.scalars(select(Product)).all()
+    aliases = db.scalars(select(ProductAlias)).all()
+    aliases_by_product: dict[int, list[str]] = {}
+    for alias in aliases:
+        aliases_by_product.setdefault(alias.product_id, []).append(alias.alias)
+
     return {
+        "version": 1,
         "exported_at": datetime.utcnow().isoformat(),
         "receipts": [
             {
@@ -21,6 +27,9 @@ def export_json(db: Session) -> dict:
                 "purchase_date": r.purchase_date.isoformat() if r.purchase_date else None,
                 "total": r.total,
                 "notes": r.notes,
+                "image_hash": r.image_hash,
+                "parse_confidence": r.parse_confidence,
+                "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
                 "line_items": [
                     {
                         "raw_name": item.raw_name,
@@ -28,6 +37,8 @@ def export_json(db: Session) -> dict:
                         "unit_price": item.unit_price,
                         "line_total": item.line_total,
                         "product_id": item.product_id,
+                        "unit_label": item.unit_label,
+                        "parse_confidence": item.parse_confidence,
                     }
                     for item in r.line_items
                 ],
@@ -40,6 +51,9 @@ def export_json(db: Session) -> dict:
                 "canonical_name": p.canonical_name,
                 "category": p.category,
                 "is_watched": p.is_watched,
+                "normalized_unit": p.normalized_unit,
+                "unit_amount": p.unit_amount,
+                "aliases": aliases_by_product.get(p.id, []),
             }
             for p in products
         ],

@@ -29,6 +29,12 @@ const toggleItemsEditBtn = document.getElementById("toggle-items-edit-btn");
 const mergeSelectedBtn = document.getElementById("merge-selected-btn");
 const toggleWatchBtn = document.getElementById("toggle-watch-btn");
 const reviewQueueBtn = document.getElementById("review-queue-btn");
+const bulkReparseBtn = document.getElementById("bulk-reparse-btn");
+const markReviewedBtn = document.getElementById("mark-reviewed-btn");
+const importForm = document.getElementById("import-form");
+const unitForm = document.getElementById("unit-form");
+const chartRawBtn = document.getElementById("chart-raw-btn");
+const chartUnitBtn = document.getElementById("chart-unit-btn");
 
 let priceChart, categoryChart, storeChart, monthlyChart;
 let selectedReceiptId = null;
@@ -41,6 +47,7 @@ let bulkEditMode = false;
 let reviewQueueMode = false;
 let activeView = "receipts";
 let groceryCategories = [];
+let chartMode = "raw";
 
 function money(v) { return v == null ? "—" : `$${Number(v).toFixed(2)}`; }
 function pct(v) { if (v == null) return "—"; return `${v > 0 ? "+" : ""}${Number(v).toFixed(1)}%`; }
@@ -125,6 +132,8 @@ async function loadWatchlist() {
 async function loadReceipts() {
   const path = reviewQueueMode ? "/api/receipts?review_only=true" : "/api/receipts";
   const receipts = await api(path);
+  const queue = reviewQueueMode ? receipts : await api("/api/receipts/review-queue");
+  reviewQueueBtn.textContent = queue.length ? `Needs review (${queue.length})` : "Needs review";
   receiptList.innerHTML = receipts.length ? "" : `<li class='meta'>${reviewQueueMode ? "No receipts need review." : "No receipts yet."}</li>`;
   for (const r of receipts) {
     const li = document.createElement("li");
@@ -179,11 +188,17 @@ function renderDuplicateWarning(ids) {
 }
 
 function renderReviewBanner(receipt) {
-  if (!receipt.needs_review) { reviewBanner.classList.add("hidden"); return; }
+  const markBtn = document.getElementById("mark-reviewed-btn");
+  if (!receipt.needs_review) {
+    reviewBanner.classList.add("hidden");
+    markBtn.classList.add("hidden");
+    return;
+  }
   reviewBanner.classList.remove("hidden");
   reviewBanner.className = "validation-banner warning";
-  const conf = receipt.parse_confidence != null ? ` Parse confidence: ${Math.round(receipt.parse_confidence * 100)}%.` : "";
-  reviewBanner.textContent = `This receipt needs review.${conf}`;
+  const conf = receipt.parse_confidence != null ? ` Confidence: ${Math.round(receipt.parse_confidence * 100)}%.` : "";
+  reviewBanner.textContent = `Needs review — fix items or totals, then mark reviewed.${conf}`;
+  markBtn.classList.remove("hidden");
 }
 
 function setReceiptEditMode(on) {
@@ -261,7 +276,13 @@ async function showReceipt(id) {
   const notesView = document.getElementById("detail-notes-view");
   if (currentReceipt.notes) { notesView.textContent = `Notes: ${currentReceipt.notes}`; notesView.classList.remove("hidden"); }
   else notesView.classList.add("hidden");
-  document.getElementById("detail-image").src = `/api/receipts/${id}/image?t=${Date.now()}`;
+  const img = document.getElementById("detail-image");
+  if (currentReceipt.image_path === "imported/no-image") {
+    img.classList.add("hidden");
+  } else {
+    img.classList.remove("hidden");
+    img.src = `/api/receipts/${id}/image?t=${Date.now()}`;
+  }
   document.getElementById("edit-store").value = currentReceipt.store_name || "";
   document.getElementById("edit-date").value = currentReceipt.purchase_date || "";
   document.getElementById("edit-total").value = currentReceipt.total ?? "";
@@ -307,16 +328,54 @@ function chartOpts(price = false) {
   return { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: "#e8eef7" } } }, scales: { x: { ticks: { color: "#9fb0c7" }, grid: { color: "#2d3a4d" } }, y: { ticks: { color: "#9fb0c7", callback: (v) => price ? `$${v}` : v }, grid: { color: "#2d3a4d" } } } };
 }
 
+function renderProductChart(product) {
+  const a = product.analytics;
+  const unit = product.normalized_unit || "unit";
+  const hasUnit = product.unit_amount && product.history.some((p) => p.normalized_price != null);
+  chartUnitBtn.classList.toggle("hidden", !hasUnit);
+  const useUnit = chartMode === "unit" && hasUnit;
+  const prices = product.history.map((p) => (useUnit ? p.normalized_price : p.effective_price));
+  const avg = useUnit && product.normalized_unit_price != null
+    ? product.history.map(() => product.normalized_unit_price)
+    : product.history.map(() => a.avg_price);
+  const label = useUnit ? `Price per ${unit}` : "Shelf price";
+  if (priceChart) priceChart.destroy();
+  priceChart = new Chart(document.getElementById("price-chart"), {
+    type: "line",
+    data: {
+      labels: product.history.map((p) => formatDate(p.purchase_date)),
+      datasets: [
+        { label, data: prices, borderColor: "#5eead4", backgroundColor: "rgba(94,234,212,0.12)", fill: true, tension: 0.2 },
+        { label: "Average", data: avg, borderColor: "#fbbf24", borderDash: [6, 4], pointRadius: 0 },
+      ],
+    },
+    options: chartOpts(true),
+  });
+}
+
 function renderProductAnalytics(product) {
   currentProduct = product;
   const a = product.analytics;
   document.getElementById("product-title").textContent = product.canonical_name;
-  document.getElementById("product-subtitle").textContent = [product.category || "Uncategorized", product.aliases?.length ? `aliases: ${product.aliases.join(", ")}` : "", product.normalized_unit_price != null ? `${money(product.normalized_unit_price)}/${product.normalized_unit}` : ""].filter(Boolean).join(" · ");
+  const unitLabel = product.unit_amount && product.normalized_unit ? `${product.unit_amount} ${product.normalized_unit}` : null;
+  document.getElementById("product-subtitle").textContent = [
+    product.category || "Uncategorized",
+    unitLabel ? `package: ${unitLabel}` : null,
+    product.normalized_unit_price != null ? `${money(product.normalized_unit_price)}/${product.normalized_unit}` : null,
+  ].filter(Boolean).join(" · ");
   document.getElementById("product-category").value = product.category || "";
+  document.getElementById("product-unit-amount").value = product.unit_amount ?? "";
+  document.getElementById("product-normalized-unit").value = product.normalized_unit || "";
   toggleWatchBtn.textContent = product.is_watched ? "★ Watching" : "☆ Watch";
-  document.getElementById("stats-grid").innerHTML = [statCard("Latest", money(a.latest_price)), statCard("Average", money(a.avg_price)), statCard("Low / High", `${money(a.min_price)} / ${money(a.max_price)}`), statCard("Since first", pct(a.change_since_first_pct), "", pctClass(a.change_since_first_pct)), statCard("Since last", pct(a.change_since_previous_pct), "", pctClass(a.change_since_previous_pct)), statCard("Frequency", a.avg_days_between_purchases != null ? `~${a.avg_days_between_purchases}d` : "—")].join("");
-  if (priceChart) priceChart.destroy();
-  priceChart = new Chart(document.getElementById("price-chart"), { type: "line", data: { labels: product.history.map((p) => formatDate(p.purchase_date)), datasets: [{ label: "Unit price", data: product.history.map((p) => p.effective_price), borderColor: "#5eead4", fill: true, tension: 0.2 }, { label: "Average", data: product.history.map(() => a.avg_price), borderColor: "#fbbf24", borderDash: [6, 4], pointRadius: 0 }] }, options: chartOpts(true) });
+  document.getElementById("stats-grid").innerHTML = [
+    statCard("Latest", money(a.latest_price)),
+    statCard("Per unit", product.normalized_unit_price != null ? money(product.normalized_unit_price) : "—", product.normalized_unit || ""),
+    statCard("Average", money(a.avg_price)),
+    statCard("Since first", pct(a.change_since_first_pct), "", pctClass(a.change_since_first_pct)),
+    statCard("Since last", pct(a.change_since_previous_pct), "", pctClass(a.change_since_previous_pct)),
+    statCard("Frequency", a.avg_days_between_purchases != null ? `~${a.avg_days_between_purchases}d` : "—"),
+  ].join("");
+  renderProductChart(product);
   const storeRows = document.getElementById("store-comparison-rows");
   storeRows.innerHTML = product.store_comparison?.length ? "" : "<tr><td colspan='4' class='meta'>Need purchases at multiple stores.</td></tr>";
   product.store_comparison?.forEach((s) => { const tr = document.createElement("tr"); tr.innerHTML = `<td>${s.store}</td><td class="num">${s.purchase_count}</td><td class="num">${money(s.avg_price)}</td><td class="num">${money(s.latest_price)}</td>`; storeRows.appendChild(tr); });
@@ -325,7 +384,13 @@ function renderProductAnalytics(product) {
   [...a.changes].reverse().forEach((c) => { const tr = document.createElement("tr"); tr.innerHTML = `<td>${formatDate(c.from_date)} → ${formatDate(c.to_date)}</td><td class="num">${money(c.from_price)}</td><td class="num">${money(c.to_price)}</td><td class="num ${pctClass(c.change_pct)}">${pct(c.change_pct)}</td>`; changeRows.appendChild(tr); });
   const historyRows = document.getElementById("history-rows");
   historyRows.innerHTML = "";
-  [...product.history].reverse().forEach((p) => { const tr = document.createElement("tr"); tr.innerHTML = `<td>${formatDate(p.purchase_date)}</td><td class="num">${money(p.effective_price)}</td><td class="num">${p.quantity}</td><td><button type="button" class="item-link">#${p.receipt_id}</button></td>`; tr.querySelector("button").addEventListener("click", () => showReceipt(p.receipt_id)); historyRows.appendChild(tr); });
+  [...product.history].reverse().forEach((p) => {
+    const tr = document.createElement("tr");
+    const price = p.normalized_price != null ? `${money(p.effective_price)} (${money(p.normalized_price)}/${product.normalized_unit || "unit"})` : money(p.effective_price);
+    tr.innerHTML = `<td>${formatDate(p.purchase_date)}</td><td class="num">${price}</td><td class="num">${p.quantity}</td><td><button type="button" class="item-link">#${p.receipt_id}</button></td>`;
+    tr.querySelector("button").addEventListener("click", () => showReceipt(p.receipt_id));
+    historyRows.appendChild(tr);
+  });
 }
 
 async function showProduct(id, { fromReceipt = false, name = null } = {}) {
@@ -384,6 +449,95 @@ mergeSelectedBtn.addEventListener("click", () => { const ids = [...selectedProdu
 document.getElementById("load-suggestions-btn").addEventListener("click", () => loadMergeSuggestions(false).catch((e) => setStatus(e.message, "error")));
 document.getElementById("ai-suggestions-btn").addEventListener("click", () => loadMergeSuggestions(true).catch((e) => setStatus(e.message, "error")));
 reviewQueueBtn.addEventListener("click", () => { reviewQueueMode = !reviewQueueMode; loadReceipts(); });
+
+bulkReparseBtn.addEventListener("click", async () => {
+  const candidates = await api("/api/receipts/reparse-candidates");
+  const missing = candidates.filter((c) => c.missing_categories).length;
+  const choice = confirm(
+    `Re-parse receipts using OpenAI (uses API credits).\n\n` +
+    `OK = only receipts missing categories (${missing})\n` +
+    `Cancel, then OK on next prompt = re-parse ALL ${candidates.length} with images`
+  );
+  let payload = { missing_categories_only: true };
+  if (!choice) {
+    if (!confirm(`Re-parse all ${candidates.length} receipts? This may take a while.`)) return;
+    payload = { missing_categories_only: false };
+  }
+  bulkReparseBtn.disabled = true;
+  setStatus("Bulk re-parsing...");
+  try {
+    const result = await api("/api/receipts/reparse/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    setStatus(`Re-parsed ${result.succeeded.length}/${result.total}. Failed: ${result.failed.length}.`, result.failed.length ? "error" : "success");
+    await loadReceipts();
+    if (selectedReceiptId) await showReceipt(selectedReceiptId);
+  } catch (err) {
+    setStatus(err.message, "error");
+  } finally {
+    bulkReparseBtn.disabled = false;
+  }
+});
+
+markReviewedBtn.addEventListener("click", async () => {
+  if (!selectedReceiptId) return;
+  await api(`/api/receipts/${selectedReceiptId}/mark-reviewed`, { method: "POST" });
+  await showReceipt(selectedReceiptId);
+  setStatus("Marked as reviewed.", "success");
+});
+
+importForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const file = document.getElementById("import-file").files[0];
+  if (!file) return;
+  const replace = document.getElementById("import-replace").checked;
+  if (replace && !confirm("Replace ALL existing data with this backup?")) return;
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const result = await api(`/api/import/json/file?replace=${replace}`, { method: "POST", body: fd });
+    setStatus(`Imported ${result.imported_receipts} receipts, ${result.imported_items} items.`, "success");
+    document.getElementById("import-file").value = "";
+    selectedReceiptId = null;
+    setView("receipts");
+    await loadReceipts();
+  } catch (err) {
+    setStatus(err.message, "error");
+  }
+});
+
+unitForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!selectedProductId) return;
+  const amountVal = document.getElementById("product-unit-amount").value;
+  await api(`/api/products/${selectedProductId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      unit_amount: amountVal === "" ? null : Number(amountVal),
+      normalized_unit: document.getElementById("product-normalized-unit").value || null,
+    }),
+  });
+  await showProduct(selectedProductId, { fromReceipt: false });
+  setStatus("Unit size saved.", "success");
+});
+
+chartRawBtn.addEventListener("click", () => {
+  chartMode = "raw";
+  chartRawBtn.classList.add("active");
+  chartUnitBtn.classList.remove("active");
+  if (currentProduct) renderProductChart(currentProduct);
+});
+
+chartUnitBtn.addEventListener("click", () => {
+  chartMode = "unit";
+  chartUnitBtn.classList.add("active");
+  chartRawBtn.classList.remove("active");
+  if (currentProduct) renderProductChart(currentProduct);
+});
+
 toggleWatchBtn.addEventListener("click", async () => {
   if (!selectedProductId) return;
   await api(`/api/products/${selectedProductId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ is_watched: !currentProduct?.is_watched }) });

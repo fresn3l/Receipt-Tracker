@@ -35,9 +35,20 @@
           <p id="upload-status" class="status"></p>
           <div class="inline-actions wrap">
             <button type="button" id="review-queue-btn" class="secondary small">Needs review</button>
+            <button type="button" id="bulk-reparse-btn" class="secondary small">Bulk re-parse</button>
             <a class="button-link secondary small" href="/api/export/csv">Export CSV</a>
             <a class="button-link secondary small" href="/api/export/json" target="_blank">Export JSON</a>
           </div>
+          <form id="import-form" class="import-form">
+            <label class="import-label">
+              Import JSON backup
+              <input type="file" id="import-file" accept="application/json,.json" />
+            </label>
+            <label class="import-check">
+              <input type="checkbox" id="import-replace" /> Replace existing data
+            </label>
+            <button type="submit" class="secondary small">Import</button>
+          </form>
           <h2>Receipts</h2>
           <ul id="receipt-list" class="list"></ul>
         </div>
@@ -98,6 +109,7 @@
           <div class="toolbar">
             <button type="button" id="edit-receipt-btn" class="secondary">Edit receipt</button>
             <button type="button" id="toggle-items-edit-btn" class="secondary">Edit all items</button>
+            <button type="button" id="mark-reviewed-btn" class="secondary">Mark reviewed</button>
             <button type="button" id="reparse-btn" class="secondary">Re-parse</button>
             <button type="button" id="delete-receipt-btn" class="danger">Delete receipt</button>
           </div>
@@ -135,6 +147,25 @@
             <label>Category <select id="product-category"></select></label>
             <button type="submit" class="secondary small">Save category</button>
           </form>
+
+          <form id="unit-form" class="category-form">
+            <label>Package size <input type="number" id="product-unit-amount" step="0.01" min="0" placeholder="16" /></label>
+            <label>Unit
+              <select id="product-normalized-unit">
+                <option value="">—</option>
+                <option value="oz">oz</option>
+                <option value="lb">lb</option>
+                <option value="each">each</option>
+                <option value="L">L</option>
+              </select>
+            </label>
+            <button type="submit" class="secondary small">Save unit</button>
+          </form>
+
+          <div class="inline-actions wrap">
+            <button type="button" id="chart-raw-btn" class="secondary small active">Shelf price</button>
+            <button type="button" id="chart-unit-btn" class="secondary small">Per-unit price</button>
+          </div>
 
           <div id="stats-grid" class="stats-grid"></div>
           <div class="chart-wrap"><canvas id="price-chart"></canvas></div>

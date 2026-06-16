@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select
@@ -36,6 +37,7 @@ def apply_parsed_data(
     receipt.purchase_date = parsed.purchase_date
     receipt.total = parsed.total
     receipt.raw_parse_json = raw_json
+    receipt.reviewed_at = None
 
     confidences = [item.confidence for item in parsed.line_items if item.confidence is not None]
     receipt.parse_confidence = round(sum(confidences) / len(confidences), 2) if confidences else None
@@ -71,6 +73,8 @@ def load_receipt(db: Session, receipt_id: int) -> Receipt | None:
 
 
 def needs_review(receipt: Receipt, validation, duplicate_ids: list[int]) -> bool:
+    if receipt.reviewed_at is not None:
+        return False
     if not validation.is_valid or duplicate_ids:
         return True
     if receipt.parse_confidence is not None and receipt.parse_confidence < CONFIDENCE_REVIEW_THRESHOLD:
@@ -79,6 +83,14 @@ def needs_review(receipt: Receipt, validation, duplicate_ids: list[int]) -> bool
         item.parse_confidence is not None and item.parse_confidence < ITEM_CONFIDENCE_REVIEW_THRESHOLD
         for item in receipt.line_items
     )
+
+
+def mark_receipt_reviewed(receipt: Receipt) -> None:
+    receipt.reviewed_at = datetime.utcnow()
+
+
+def clear_receipt_review(receipt: Receipt) -> None:
+    receipt.reviewed_at = None
 
 
 def build_receipt_detail(receipt: Receipt, possible_duplicate_ids: list[int] | None = None) -> ReceiptDetail:
@@ -93,6 +105,7 @@ def build_receipt_detail(receipt: Receipt, possible_duplicate_ids: list[int] | N
         created_at=receipt.created_at,
         notes=receipt.notes,
         parse_confidence=receipt.parse_confidence,
+        reviewed_at=receipt.reviewed_at,
         line_items=receipt.line_items,
         validation=validation,
         possible_duplicate_ids=duplicate_ids,
@@ -101,5 +114,7 @@ def build_receipt_detail(receipt: Receipt, possible_duplicate_ids: list[int] | N
 
 
 def delete_receipt_files(receipt: Receipt) -> None:
+    if receipt.image_path == "imported/no-image":
+        return
     path = Path(receipt.image_path)
     path.unlink(missing_ok=True)

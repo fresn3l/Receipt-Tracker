@@ -66,6 +66,13 @@ Personal, local grocery receipt tracker. Upload receipt photos, extract line ite
 - **Receipt notes** — tag trips ("stock-up", "party", etc.)
 - **PWA** — installable web app with service worker for offline shell
 
+## Phase A — Trust the data
+
+- **Mark reviewed** — clear receipts from the review queue after you've verified them
+- **Bulk re-parse** — backfill categories and unit data across many receipts (missing categories or all)
+- **Product unit size** — edit package size and toggle per-unit price charts
+- **Import JSON** — restore from an exported backup (merge or replace)
+
 ## Setup
 
 1. Create a virtual environment and install dependencies:
@@ -114,7 +121,10 @@ Both are gitignored and stay on your machine.
 | GET | `/api/insights/inflation-basket` | Basket inflation metric |
 | GET | `/api/spending/overview` | Spending summary and chart data |
 | GET/PATCH | `/api/settings/budget` | Monthly budget settings |
-| GET | `/api/export/json` | Export all data as JSON |
+| POST | `/api/receipts/{id}/mark-reviewed` | Mark receipt as reviewed |
+| POST | `/api/receipts/reparse/batch` | Bulk re-parse receipts |
+| GET | `/api/receipts/reparse-candidates` | Receipts eligible for re-parse |
+| POST | `/api/import/json/file` | Import JSON backup file |
 | GET | `/api/export/csv` | Export line items as CSV |
 
 ## Tests

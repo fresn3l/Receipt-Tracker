@@ -6,6 +6,7 @@ _RECEIPT_COLUMNS = {
     "image_hash": "VARCHAR(64)",
     "notes": "TEXT",
     "parse_confidence": "FLOAT",
+    "reviewed_at": "DATETIME",
 }
 
 

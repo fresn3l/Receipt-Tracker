@@ -13,6 +13,8 @@ from backend.config import RECEIPTS_DIR
 from backend.database import get_db
 from backend.duplicates import find_duplicate_receipts, hash_image
 from backend.export_service import export_csv, export_json
+from backend.import_service import import_json_data
+from backend.reparse_service import bulk_reparse_receipts, reparse_candidates
 from backend.image_preprocess import preprocess_receipt_image
 from backend.models import LineItem, Product, ProductAlias, Receipt
 from backend.parser import parse_receipt_image
@@ -33,14 +35,20 @@ from backend.product_service import (
 from backend.receipt_service import (
     apply_parsed_data,
     build_receipt_detail,
+    clear_receipt_review,
     delete_receipt_files,
     load_receipt,
+    mark_receipt_reviewed,
     needs_review,
 )
 from backend.schemas import (
     BatchUploadResult,
+    BulkReparseRequest,
+    BulkReparseResult,
     BudgetSettings,
     BudgetSettingsUpdate,
+    ImportRequest,
+    ImportResult,
     InflationBasket,
     LineItemCreate,
     LineItemOut,
@@ -55,6 +63,7 @@ from backend.schemas import (
     ReceiptDetail,
     ReceiptSummary,
     ReceiptUpdate,
+    ReparseCandidate,
     SpendingOverview,
 )
 from backend.settings_service import get_category_budgets, get_settings
@@ -71,7 +80,7 @@ GROCERY_CATEGORIES = [
 ]
 
 
-def _fetch_product_history(db: Session, product_id: int) -> list[PricePoint]:
+def _fetch_product_history(db: Session, product_id: int, product: Product | None = None) -> list[PricePoint]:
     rows = db.execute(
         select(LineItem, Receipt.purchase_date, Receipt.id, Receipt.created_at)
         .join(Receipt, LineItem.receipt_id == Receipt.id)
@@ -79,6 +88,8 @@ def _fetch_product_history(db: Session, product_id: int) -> list[PricePoint]:
         .order_by(Receipt.purchase_date.asc().nullslast(), Receipt.created_at.asc())
     ).all()
     history: list[PricePoint] = []
+    if product is None:
+        product = db.get(Product, product_id)
     for item, purchase_date, receipt_id, _created_at in rows:
         point = PricePoint(
             purchase_date=purchase_date,
@@ -88,12 +99,13 @@ def _fetch_product_history(db: Session, product_id: int) -> list[PricePoint]:
             receipt_id=receipt_id,
         )
         point.effective_price = effective_unit_price(point)
+        point.normalized_price = normalized_unit_price(product, point.effective_price) if product else None
         history.append(point)
     return history
 
 
 def _product_summary(db: Session, product: Product) -> ProductOut:
-    history = _fetch_product_history(db, product.id)
+    history = _fetch_product_history(db, product.id, product)
     analytics = compute_product_analytics(history)
     return ProductOut(
         id=product.id,
@@ -110,7 +122,7 @@ def _product_summary(db: Session, product: Product) -> ProductOut:
 
 
 def _product_detail(db: Session, product: Product) -> ProductDetail:
-    history = _fetch_product_history(db, product.id)
+    history = _fetch_product_history(db, product.id, product)
     analytics = compute_product_analytics(history)
     aliases = db.scalars(select(ProductAlias.alias).where(ProductAlias.product_id == product.id)).all()
     return ProductDetail(
@@ -157,6 +169,7 @@ def _receipt_summary(db: Session, receipt: Receipt) -> ReceiptSummary:
         has_warning=not validation.is_valid,
         possible_duplicate=bool(duplicate_ids),
         needs_review=needs_review(receipt, validation, duplicate_ids),
+        reviewed_at=receipt.reviewed_at,
     )
 
 
@@ -243,6 +256,21 @@ def review_queue(db: Session = Depends(get_db)):
     return list_receipts(review_only=True, db=db)
 
 
+@router.get("/receipts/reparse-candidates", response_model=list[ReparseCandidate])
+def list_reparse_candidates(db: Session = Depends(get_db)):
+    return reparse_candidates(db)
+
+
+@router.post("/receipts/reparse/batch", response_model=BulkReparseResult)
+def batch_reparse_receipts(payload: BulkReparseRequest, db: Session = Depends(get_db)):
+    result = bulk_reparse_receipts(
+        db,
+        payload.receipt_ids,
+        missing_categories_only=payload.missing_categories_only,
+    )
+    return BulkReparseResult(**result)
+
+
 @router.get("/receipts/{receipt_id}", response_model=ReceiptDetail)
 def get_receipt(receipt_id: int, db: Session = Depends(get_db)):
     receipt = load_receipt(db, receipt_id)
@@ -262,6 +290,7 @@ def update_receipt(receipt_id: int, payload: ReceiptUpdate, db: Session = Depend
         updates["store_name"] = normalize_store_name(updates["store_name"])
     for field, value in updates.items():
         setattr(receipt, field, value)
+    clear_receipt_review(receipt)
 
     db.commit()
     receipt = load_receipt(db, receipt_id)
@@ -300,11 +329,24 @@ def reparse_receipt(receipt_id: int, db: Session = Depends(get_db)):
     return build_receipt_detail(receipt, _duplicate_ids(db, receipt))
 
 
+@router.post("/receipts/{receipt_id}/mark-reviewed", response_model=ReceiptDetail)
+def mark_reviewed(receipt_id: int, db: Session = Depends(get_db)):
+    receipt = load_receipt(db, receipt_id)
+    if not receipt:
+        raise HTTPException(status_code=404, detail="Receipt not found.")
+    mark_receipt_reviewed(receipt)
+    db.commit()
+    receipt = load_receipt(db, receipt_id)
+    return build_receipt_detail(receipt, _duplicate_ids(db, receipt))
+
+
 @router.get("/receipts/{receipt_id}/image")
 def get_receipt_image(receipt_id: int, db: Session = Depends(get_db)):
     receipt = db.get(Receipt, receipt_id)
     if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found.")
+    if receipt.image_path == "imported/no-image":
+        raise HTTPException(status_code=404, detail="No image for imported receipt.")
     path = Path(receipt.image_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Image file missing.")
@@ -326,6 +368,7 @@ def add_line_item(receipt_id: int, payload: LineItemCreate, db: Session = Depend
         line_total=payload.line_total,
     )
     db.add(item)
+    clear_receipt_review(receipt)
     db.commit()
     db.refresh(item)
     return item
@@ -352,6 +395,7 @@ def update_line_item(
     for field in ("quantity", "unit_price", "line_total"):
         if field in updates:
             setattr(item, field, updates[field])
+    clear_receipt_review(receipt)
     db.commit()
     db.refresh(item)
     return item
@@ -366,6 +410,7 @@ def delete_line_item(receipt_id: int, item_id: int, db: Session = Depends(get_db
     if not item:
         raise HTTPException(status_code=404, detail="Line item not found.")
     db.delete(item)
+    clear_receipt_review(receipt)
     db.commit()
     cleanup_orphan_products(db)
     db.commit()
@@ -526,3 +571,32 @@ def export_data_csv(db: Session = Depends(get_db)):
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=receipts.csv"},
     )
+
+
+@router.post("/import/json", response_model=ImportResult)
+def import_data_json(payload: ImportRequest, db: Session = Depends(get_db)):
+    try:
+        result = import_json_data(db, payload.data, replace=payload.replace)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Import failed: {exc}") from exc
+    return ImportResult(**result)
+
+
+@router.post("/import/json/file", response_model=ImportResult)
+async def import_data_json_file(
+    file: UploadFile = File(...),
+    replace: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    try:
+        payload = json.loads(await file.read())
+        result = import_json_data(db, payload, replace=replace)
+        db.commit()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON file.") from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Import failed: {exc}") from exc
+    return ImportResult(**result)

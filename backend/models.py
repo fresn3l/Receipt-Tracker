@@ -18,6 +18,7 @@ class Receipt(Base):
     raw_parse_json: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
     parse_confidence: Mapped[float | None] = mapped_column(Float)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     line_items: Mapped[list["LineItem"]] = relationship(
