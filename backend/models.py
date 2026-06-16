@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -16,6 +16,8 @@ class Receipt(Base):
     image_path: Mapped[str] = mapped_column(String(500))
     image_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     raw_parse_json: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+    parse_confidence: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     line_items: Mapped[list["LineItem"]] = relationship(
@@ -29,6 +31,9 @@ class Product(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     canonical_name: Mapped[str] = mapped_column(String(300), unique=True, index=True)
     category: Mapped[str | None] = mapped_column(String(100))
+    is_watched: Mapped[bool] = mapped_column(Boolean, default=False)
+    normalized_unit: Mapped[str | None] = mapped_column(String(20))
+    unit_amount: Mapped[float | None] = mapped_column(Float)
 
     line_items: Mapped[list["LineItem"]] = relationship(back_populates="product")
     aliases: Mapped[list["ProductAlias"]] = relationship(
@@ -56,6 +61,16 @@ class LineItem(Base):
     quantity: Mapped[float] = mapped_column(Float, default=1.0)
     unit_price: Mapped[float | None] = mapped_column(Float)
     line_total: Mapped[float | None] = mapped_column(Float)
+    unit_label: Mapped[str | None] = mapped_column(String(50))
+    parse_confidence: Mapped[float | None] = mapped_column(Float)
 
     receipt: Mapped["Receipt"] = relationship(back_populates="line_items")
     product: Mapped["Product | None"] = relationship(back_populates="line_items")
+
+
+class AppSettings(Base):
+    __tablename__ = "app_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    monthly_budget: Mapped[float | None] = mapped_column(Float)
+    category_budgets_json: Mapped[str | None] = mapped_column(Text)

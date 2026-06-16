@@ -1,5 +1,7 @@
 const receiptList = document.getElementById("receipt-list");
 const productList = document.getElementById("product-list");
+const watchlistEl = document.getElementById("watchlist");
+const alertsPanel = document.getElementById("alerts-panel");
 const mergeSuggestions = document.getElementById("merge-suggestions");
 const uploadForm = document.getElementById("upload-form");
 const uploadStatus = document.getElementById("upload-status");
@@ -12,10 +14,12 @@ const productPanel = document.getElementById("product-panel");
 const spendingPanel = document.getElementById("spending-panel");
 const validationBanner = document.getElementById("validation-banner");
 const duplicateBanner = document.getElementById("duplicate-banner");
+const reviewBanner = document.getElementById("review-banner");
 const detailView = document.getElementById("detail-view");
 const receiptEditForm = document.getElementById("receipt-edit-form");
 const addItemForm = document.getElementById("add-item-form");
 const categoryForm = document.getElementById("category-form");
+const budgetForm = document.getElementById("budget-form");
 const sidebarReceipts = document.getElementById("sidebar-receipts");
 const sidebarPrices = document.getElementById("sidebar-prices");
 const sidebarSpending = document.getElementById("sidebar-spending");
@@ -23,11 +27,10 @@ const productSearch = document.getElementById("product-search");
 const backToReceiptBtn = document.getElementById("back-to-receipt");
 const toggleItemsEditBtn = document.getElementById("toggle-items-edit-btn");
 const mergeSelectedBtn = document.getElementById("merge-selected-btn");
+const toggleWatchBtn = document.getElementById("toggle-watch-btn");
+const reviewQueueBtn = document.getElementById("review-queue-btn");
 
-let priceChart = null;
-let categoryChart = null;
-let storeChart = null;
-let monthlyChart = null;
+let priceChart, categoryChart, storeChart, monthlyChart;
 let selectedReceiptId = null;
 let selectedProductId = null;
 let selectedProductIds = new Set();
@@ -35,131 +38,164 @@ let currentReceipt = null;
 let currentProduct = null;
 let editingItemId = null;
 let bulkEditMode = false;
+let reviewQueueMode = false;
 let activeView = "receipts";
 let groceryCategories = [];
 
-function money(value) {
-  if (value == null) return "—";
-  return `$${Number(value).toFixed(2)}`;
-}
-
-function pct(value) {
-  if (value == null) return "—";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${Number(value).toFixed(1)}%`;
-}
-
-function pctClass(value) {
-  if (value == null || value === 0) return "neutral";
-  return value > 0 ? "up" : "down";
-}
-
-function formatDate(value) {
-  if (!value) return "Unknown date";
-  return new Date(value + "T00:00:00").toLocaleDateString();
-}
-
-function toInputDate(value) {
-  return value || "";
-}
+function money(v) { return v == null ? "—" : `$${Number(v).toFixed(2)}`; }
+function pct(v) { if (v == null) return "—"; return `${v > 0 ? "+" : ""}${Number(v).toFixed(1)}%`; }
+function pctClass(v) { if (v == null || v === 0) return "neutral"; return v > 0 ? "up" : "down"; }
+function formatDate(v) { return v ? new Date(v + "T00:00:00").toLocaleDateString() : "Unknown date"; }
+function escapeAttr(v) { return String(v).replaceAll('"', "&quot;"); }
 
 async function api(path, options = {}) {
   const response = await fetch(path, options);
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    const detail = Array.isArray(payload.detail)
-      ? payload.detail.map((entry) => entry.msg).join(", ")
-      : payload.detail;
+    const detail = Array.isArray(payload.detail) ? payload.detail.map((e) => e.msg).join(", ") : payload.detail;
     throw new Error(detail || "Request failed");
   }
   if (response.status === 204) return null;
   return response.json();
 }
 
-function setStatus(message, type = "") {
-  uploadStatus.textContent = message;
+function setStatus(msg, type = "") {
+  uploadStatus.textContent = msg;
   uploadStatus.className = `status ${type}`.trim();
 }
 
-function escapeAttr(value) {
-  return String(value).replaceAll('"', "&quot;");
-}
-
-function updateMergeButton() {
-  mergeSelectedBtn.disabled = selectedProductIds.size < 2;
-}
+function updateMergeButton() { mergeSelectedBtn.disabled = selectedProductIds.size < 2; }
 
 function setView(view) {
   activeView = view;
-  document.querySelectorAll(".nav-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.view === view);
-  });
+  document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   sidebarReceipts.classList.toggle("hidden", view !== "receipts");
   sidebarPrices.classList.toggle("hidden", view !== "prices");
   sidebarSpending.classList.toggle("hidden", view !== "spending");
-
   receiptDetail.classList.add("hidden");
   productPanel.classList.add("hidden");
   spendingPanel.classList.add("hidden");
   emptyState.classList.add("hidden");
 
   if (view === "receipts") {
-    if (selectedReceiptId) receiptDetail.classList.remove("hidden");
-    else {
-      emptyState.classList.remove("hidden");
+    (selectedReceiptId ? receiptDetail : emptyState).classList.remove("hidden");
+    if (!selectedReceiptId) {
       emptyTitle.textContent = "Select a receipt";
       emptyText.textContent = "Choose a receipt from the list or upload a new one.";
     }
+    loadReceipts().catch((e) => setStatus(e.message, "error"));
   } else if (view === "prices") {
-    if (selectedProductId) productPanel.classList.remove("hidden");
-    else {
-      emptyState.classList.remove("hidden");
+    (selectedProductId ? productPanel : emptyState).classList.remove("hidden");
+    if (!selectedProductId) {
       emptyTitle.textContent = "Track grocery prices";
-      emptyText.textContent = "Search and select a product, or merge duplicates to clean your data.";
+      emptyText.textContent = "Search products, use the watchlist, and review price alerts.";
     }
-    loadProducts().catch((error) => setStatus(error.message, "error"));
-  } else if (view === "spending") {
+    loadAlerts().catch(() => {});
+    loadWatchlist().catch(() => {});
+    loadProducts().catch((e) => setStatus(e.message, "error"));
+  } else {
     spendingPanel.classList.remove("hidden");
-    loadSpending().catch((error) => setStatus(error.message, "error"));
+    loadSpending().catch((e) => setStatus(e.message, "error"));
   }
 }
 
-function renderValidation(validation) {
-  if (!validation || validation.is_valid) {
-    validationBanner.classList.add("hidden");
-    validationBanner.textContent = "";
-    return;
+async function loadAlerts() {
+  const alerts = await api("/api/insights/alerts");
+  if (!alerts.length) { alertsPanel.classList.add("hidden"); return; }
+  alertsPanel.classList.remove("hidden");
+  alertsPanel.innerHTML = `<strong>Price alerts</strong>${alerts.slice(0, 5).map((a) => `<div class="alert-item"><button type="button" class="item-link" data-id="${a.product_id}">${a.product_name}</button>: ${a.message}</div>`).join("")}`;
+  alertsPanel.querySelectorAll("button[data-id]").forEach((btn) => btn.addEventListener("click", () => showProduct(Number(btn.dataset.id), { fromReceipt: false })));
+}
+
+async function loadWatchlist() {
+  const items = await api("/api/products/watchlist");
+  watchlistEl.innerHTML = items.length ? "" : "<li class='meta'>Pin items from product detail.</li>";
+  for (const p of items) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = p.id === selectedProductId ? "active" : "";
+    btn.innerHTML = `<strong>${p.canonical_name}</strong><span class="meta">${money(p.latest_price)}${p.change_since_previous_pct != null ? ` · ${pct(p.change_since_previous_pct)}` : ""}</span>`;
+    btn.addEventListener("click", () => showProduct(p.id, { fromReceipt: false }));
+    li.appendChild(btn);
+    watchlistEl.appendChild(li);
   }
+}
+
+async function loadReceipts() {
+  const path = reviewQueueMode ? "/api/receipts?review_only=true" : "/api/receipts";
+  const receipts = await api(path);
+  receiptList.innerHTML = receipts.length ? "" : `<li class='meta'>${reviewQueueMode ? "No receipts need review." : "No receipts yet."}</li>`;
+  for (const r of receipts) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = r.id === selectedReceiptId ? "active" : "";
+    const flags = [r.has_warning && "⚠ totals", r.possible_duplicate && "⚠ duplicate", r.needs_review && "⚠ review"].filter(Boolean).join(" · ");
+    btn.innerHTML = `<strong>${r.store_name || "Unknown store"}</strong><span class="meta">${formatDate(r.purchase_date)} · ${r.item_count} items · ${money(r.total)}${flags ? ` · ${flags}` : ""}</span>`;
+    btn.addEventListener("click", () => showReceipt(r.id));
+    li.appendChild(btn);
+    receiptList.appendChild(li);
+  }
+  reviewQueueBtn.classList.toggle("active", reviewQueueMode);
+}
+
+async function loadProducts() {
+  const q = productSearch.value.trim();
+  const path = q ? `/api/products?q=${encodeURIComponent(q)}` : "/api/products";
+  const products = await api(path);
+  productList.innerHTML = products.length ? "" : "<li class='meta'>No products found.</li>";
+  for (const p of products) {
+    const li = document.createElement("li");
+    li.className = "product-row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = selectedProductIds.has(p.id);
+    cb.addEventListener("change", () => { cb.checked ? selectedProductIds.add(p.id) : selectedProductIds.delete(p.id); updateMergeButton(); });
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = p.id === selectedProductId ? "active" : "";
+    const unit = p.normalized_unit_price != null ? ` · ${money(p.normalized_unit_price)}/${p.normalized_unit || "unit"}` : "";
+    btn.innerHTML = `<strong>${p.is_watched ? "★ " : ""}${p.canonical_name}</strong><span class="meta">${p.purchase_count} buys · ${money(p.latest_price)}${unit}</span>`;
+    btn.addEventListener("click", () => showProduct(p.id, { fromReceipt: false }));
+    li.append(cb, btn);
+    productList.appendChild(li);
+  }
+  updateMergeButton();
+}
+
+function renderValidation(v) {
+  if (!v || v.is_valid) { validationBanner.classList.add("hidden"); return; }
   validationBanner.classList.remove("hidden");
   validationBanner.className = "validation-banner warning";
-  const parts = [...validation.warnings];
-  if (validation.items_sum != null && validation.receipt_total != null) {
-    parts.unshift(`Items: ${money(validation.items_sum)} · Receipt: ${money(validation.receipt_total)}`);
-  }
-  validationBanner.textContent = parts.join(" ");
+  validationBanner.textContent = [...(v.items_sum != null ? [`Items: ${money(v.items_sum)} · Receipt: ${money(v.receipt_total)}`] : []), ...v.warnings].join(" ");
 }
 
 function renderDuplicateWarning(ids) {
-  if (!ids || !ids.length) {
-    duplicateBanner.classList.add("hidden");
-    duplicateBanner.textContent = "";
-    return;
-  }
+  if (!ids?.length) { duplicateBanner.classList.add("hidden"); return; }
   duplicateBanner.classList.remove("hidden");
   duplicateBanner.className = "validation-banner warning";
-  duplicateBanner.textContent = `Possible duplicate of receipt(s): ${ids.map((id) => `#${id}`).join(", ")}. Same store, date, and total.`;
+  duplicateBanner.textContent = `Possible duplicate of receipt(s): ${ids.map((id) => `#${id}`).join(", ")}`;
 }
 
-function setReceiptEditMode(enabled) {
-  detailView.classList.toggle("hidden", enabled);
-  receiptEditForm.classList.toggle("hidden", !enabled);
+function renderReviewBanner(receipt) {
+  if (!receipt.needs_review) { reviewBanner.classList.add("hidden"); return; }
+  reviewBanner.classList.remove("hidden");
+  reviewBanner.className = "validation-banner warning";
+  const conf = receipt.parse_confidence != null ? ` Parse confidence: ${Math.round(receipt.parse_confidence * 100)}%.` : "";
+  reviewBanner.textContent = `This receipt needs review.${conf}`;
 }
 
-function setBulkEditMode(enabled) {
-  bulkEditMode = enabled;
+function setReceiptEditMode(on) {
+  detailView.classList.toggle("hidden", on);
+  receiptEditForm.classList.toggle("hidden", !on);
+}
+
+function setBulkEditMode(on) {
+  bulkEditMode = on;
   editingItemId = null;
-  toggleItemsEditBtn.textContent = enabled ? "Done editing items" : "Edit all items";
-  toggleItemsEditBtn.classList.toggle("active", enabled);
+  toggleItemsEditBtn.textContent = on ? "Done editing items" : "Edit all items";
+  toggleItemsEditBtn.classList.toggle("active", on);
   if (currentReceipt) renderReceiptItems(currentReceipt.line_items);
 }
 
@@ -168,174 +204,42 @@ function wireLineCalc(row) {
   const unit = row.querySelector('[data-field="unit_price"]');
   const total = row.querySelector('[data-field="line_total"]');
   if (!qty || !unit || !total) return;
-  const updateTotal = () => {
-    const q = Number(qty.value);
-    const u = Number(unit.value);
-    if (qty.value !== "" && unit.value !== "" && !Number.isNaN(q) && !Number.isNaN(u)) {
-      total.value = (q * u).toFixed(2);
-    }
+  const upd = () => {
+    const q = Number(qty.value), u = Number(unit.value);
+    if (qty.value && unit.value && !Number.isNaN(q) && !Number.isNaN(u)) total.value = (q * u).toFixed(2);
   };
-  qty.addEventListener("input", updateTotal);
-  unit.addEventListener("input", updateTotal);
-}
-
-async function loadReceipts() {
-  const receipts = await api("/api/receipts");
-  receiptList.innerHTML = "";
-  if (!receipts.length) {
-    receiptList.innerHTML = "<li class='meta'>No receipts yet.</li>";
-    return;
-  }
-  for (const receipt of receipts) {
-    const li = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = receipt.id === selectedReceiptId ? "active" : "";
-    const warning = receipt.has_warning ? " · ⚠ check totals" : "";
-    const duplicate = receipt.possible_duplicate ? " · ⚠ possible duplicate" : "";
-    button.innerHTML = `
-      <strong>${receipt.store_name || "Unknown store"}</strong>
-      <span class="meta">${formatDate(receipt.purchase_date)} · ${receipt.item_count} items · ${money(receipt.total)}${warning}${duplicate}</span>
-    `;
-    button.addEventListener("click", () => showReceipt(receipt.id));
-    li.appendChild(button);
-    receiptList.appendChild(li);
-  }
-}
-
-async function loadProducts() {
-  const query = productSearch.value.trim();
-  const path = query ? `/api/products?q=${encodeURIComponent(query)}` : "/api/products";
-  const products = await api(path);
-  productList.innerHTML = "";
-  if (!products.length) {
-    productList.innerHTML = "<li class='meta'>No products found.</li>";
-    updateMergeButton();
-    return;
-  }
-  for (const product of products) {
-    const li = document.createElement("li");
-    li.className = "product-row";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = selectedProductIds.has(product.id);
-    checkbox.addEventListener("change", () => {
-      if (checkbox.checked) selectedProductIds.add(product.id);
-      else selectedProductIds.delete(product.id);
-      updateMergeButton();
-    });
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = product.id === selectedProductId ? "active" : "";
-    const change =
-      product.change_since_previous_pct != null
-        ? ` · <span class="${pctClass(product.change_since_previous_pct)}">${pct(product.change_since_previous_pct)}</span>`
-        : "";
-    const category = product.category ? ` · ${product.category}` : "";
-    button.innerHTML = `
-      <strong>${product.canonical_name}</strong>
-      <span class="meta">${product.purchase_count} buys · latest ${money(product.latest_price)} · avg ${money(product.avg_price)}${category}${change}</span>
-    `;
-    button.addEventListener("click", () => showProduct(product.id, { fromReceipt: false }));
-    li.appendChild(checkbox);
-    li.appendChild(button);
-    productList.appendChild(li);
-  }
-  updateMergeButton();
-}
-
-async function loadMergeSuggestions(useLlm = false) {
-  mergeSuggestions.innerHTML = "<li class='meta'>Loading suggestions...</li>";
-  const path = useLlm ? "/api/products/merge-suggestions?use_llm=true" : "/api/products/merge-suggestions";
-  const suggestions = await api(path);
-  mergeSuggestions.innerHTML = "";
-  if (!suggestions.length) {
-    mergeSuggestions.innerHTML = "<li class='meta'>No merge suggestions found.</li>";
-    return;
-  }
-  for (const suggestion of suggestions) {
-    const li = document.createElement("li");
-    li.className = "suggestion-item";
-    li.innerHTML = `
-      <span>${suggestion.names.join(" + ")} <span class="meta">(${suggestion.reason}, ${Math.round(suggestion.score * 100)}%)</span></span>
-      <button type="button" class="secondary small">Merge</button>
-    `;
-    li.querySelector("button").addEventListener("click", () => {
-      mergeProducts(suggestion.product_ids[0], suggestion.product_ids.slice(1));
-    });
-    mergeSuggestions.appendChild(li);
-  }
-}
-
-async function mergeProducts(targetId, sourceIds) {
-  if (!confirm(`Merge ${sourceIds.length} product(s) into the selected target?`)) return;
-  const product = await api("/api/products/merge", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ target_id: targetId, source_ids: sourceIds }),
-  });
-  selectedProductIds.clear();
-  selectedProductId = product.id;
-  await loadProducts();
-  await loadMergeSuggestions();
-  await showProduct(product.id, { fromReceipt: false });
-  setStatus("Products merged.", "success");
+  qty.addEventListener("input", upd);
+  unit.addEventListener("input", upd);
 }
 
 function renderEditableRow(item) {
   const row = document.createElement("tr");
   row.className = "editing-row";
-  row.innerHTML = `
-    <td><input type="text" class="cell-input" data-field="raw_name" value="${escapeAttr(item.raw_name)}" /></td>
-    <td><input type="number" class="cell-input num" data-field="quantity" value="${item.quantity}" step="0.01" min="0" /></td>
-    <td><input type="number" class="cell-input num" data-field="unit_price" value="${item.unit_price ?? ""}" step="0.01" min="0" /></td>
-    <td><input type="number" class="cell-input num" data-field="line_total" value="${item.line_total ?? ""}" step="0.01" min="0" /></td>
-    <td class="row-actions">
-      <button type="button" class="secondary small save-item-btn">Save</button>
-      ${bulkEditMode ? "" : '<button type="button" class="secondary small cancel-item-btn">Cancel</button>'}
-    </td>
-  `;
+  row.innerHTML = `<td><input class="cell-input" data-field="raw_name" value="${escapeAttr(item.raw_name)}" /></td><td><input class="cell-input num" data-field="quantity" type="number" value="${item.quantity}" step="0.01" /></td><td><input class="cell-input num" data-field="unit_price" type="number" value="${item.unit_price ?? ""}" step="0.01" /></td><td><input class="cell-input num" data-field="line_total" type="number" value="${item.line_total ?? ""}" step="0.01" /></td><td class="row-actions"><button type="button" class="secondary small save-item-btn">Save</button>${bulkEditMode ? "" : '<button type="button" class="secondary small cancel-item-btn">Cancel</button>'}</td>`;
   wireLineCalc(row);
   row.querySelector(".save-item-btn").addEventListener("click", () => saveLineItem(item.id, row));
-  const cancelBtn = row.querySelector(".cancel-item-btn");
-  if (cancelBtn) {
-    cancelBtn.addEventListener("click", () => {
-      editingItemId = null;
-      renderReceiptItems(currentReceipt.line_items);
-    });
-  }
+  row.querySelector(".cancel-item-btn")?.addEventListener("click", () => { editingItemId = null; renderReceiptItems(currentReceipt.line_items); });
   return row;
 }
 
 function renderLineItemRow(item) {
   if (bulkEditMode || editingItemId === item.id) return renderEditableRow(item);
   const row = document.createElement("tr");
+  if (item.parse_confidence != null && item.parse_confidence < 0.7) row.classList.add("low-confidence");
   const nameCell = document.createElement("td");
   const link = document.createElement("button");
   link.type = "button";
   link.className = "item-link";
   link.textContent = item.raw_name;
-  if (item.product_id) {
-    link.addEventListener("click", () => showProduct(item.product_id, { fromReceipt: true, name: item.raw_name }));
-  }
+  if (item.product_id) link.addEventListener("click", () => showProduct(item.product_id, { fromReceipt: true, name: item.raw_name }));
   nameCell.appendChild(link);
   const actions = document.createElement("td");
   actions.className = "row-actions";
-  actions.innerHTML = `
-    <button type="button" class="secondary small edit-item-btn">Edit</button>
-    <button type="button" class="danger small delete-item-btn">Del</button>
-  `;
-  actions.querySelector(".edit-item-btn").addEventListener("click", () => {
-    editingItemId = item.id;
-    renderReceiptItems(currentReceipt.line_items);
-  });
+  actions.innerHTML = '<button type="button" class="secondary small edit-item-btn">Edit</button><button type="button" class="danger small delete-item-btn">Del</button>';
+  actions.querySelector(".edit-item-btn").addEventListener("click", () => { editingItemId = item.id; renderReceiptItems(currentReceipt.line_items); });
   actions.querySelector(".delete-item-btn").addEventListener("click", () => deleteLineItem(item.id));
-  row.appendChild(nameCell);
-  row.innerHTML += `
-    <td class="num">${item.quantity}</td>
-    <td class="num">${money(item.unit_price)}</td>
-    <td class="num">${money(item.line_total)}</td>
-  `;
+  row.append(nameCell);
+  row.innerHTML += `<td class="num">${item.quantity}</td><td class="num">${money(item.unit_price)}</td><td class="num">${money(item.line_total)}</td>`;
   row.appendChild(actions);
   row.replaceChild(nameCell, row.firstChild);
   return row;
@@ -344,45 +248,43 @@ function renderLineItemRow(item) {
 function renderReceiptItems(items) {
   const tbody = document.getElementById("detail-items");
   tbody.innerHTML = "";
-  for (const item of items) tbody.appendChild(renderLineItemRow(item));
+  items.forEach((item) => tbody.appendChild(renderLineItemRow(item)));
 }
 
-async function showReceipt(receiptId) {
-  selectedReceiptId = receiptId;
-  editingItemId = null;
-  setReceiptEditMode(false);
-  currentReceipt = await api(`/api/receipts/${receiptId}`);
+async function showReceipt(id) {
+  selectedReceiptId = id;
+  reviewQueueMode = false;
+  currentReceipt = await api(`/api/receipts/${id}`);
   setView("receipts");
   document.getElementById("detail-store").textContent = currentReceipt.store_name || "Unknown store";
   document.getElementById("detail-meta").textContent = `${formatDate(currentReceipt.purchase_date)} · Total ${money(currentReceipt.total)}`;
-  document.getElementById("detail-image").src = `/api/receipts/${receiptId}/image?t=${Date.now()}`;
+  const notesView = document.getElementById("detail-notes-view");
+  if (currentReceipt.notes) { notesView.textContent = `Notes: ${currentReceipt.notes}`; notesView.classList.remove("hidden"); }
+  else notesView.classList.add("hidden");
+  document.getElementById("detail-image").src = `/api/receipts/${id}/image?t=${Date.now()}`;
   document.getElementById("edit-store").value = currentReceipt.store_name || "";
-  document.getElementById("edit-date").value = toInputDate(currentReceipt.purchase_date);
+  document.getElementById("edit-date").value = currentReceipt.purchase_date || "";
   document.getElementById("edit-total").value = currentReceipt.total ?? "";
+  document.getElementById("edit-notes").value = currentReceipt.notes || "";
   renderValidation(currentReceipt.validation);
   renderDuplicateWarning(currentReceipt.possible_duplicate_ids);
+  renderReviewBanner(currentReceipt);
   renderReceiptItems(currentReceipt.line_items);
   await loadReceipts();
 }
 
 async function saveLineItem(itemId, row) {
   const payload = {};
-  for (const input of row.querySelectorAll(".cell-input")) {
-    const field = input.dataset.field;
-    payload[field] = field === "raw_name" ? input.value.trim() : input.value === "" ? null : Number(input.value);
-  }
-  if (!payload.raw_name) {
-    alert("Item name is required.");
-    return;
-  }
-  await api(`/api/receipts/${selectedReceiptId}/items/${itemId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+  row.querySelectorAll(".cell-input").forEach((input) => {
+    const f = input.dataset.field;
+    payload[f] = f === "raw_name" ? input.value.trim() : input.value === "" ? null : Number(input.value);
   });
+  if (!payload.raw_name) return alert("Item name is required.");
+  await api(`/api/receipts/${selectedReceiptId}/items/${itemId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   if (!bulkEditMode) editingItemId = null;
   currentReceipt = await api(`/api/receipts/${selectedReceiptId}`);
   renderValidation(currentReceipt.validation);
+  renderReviewBanner(currentReceipt);
   renderReceiptItems(currentReceipt.line_items);
 }
 
@@ -392,254 +294,188 @@ async function deleteLineItem(itemId) {
   await showReceipt(selectedReceiptId);
 }
 
-function renderStatCard(label, value, subtext = "", valueClass = "") {
-  return `<article class="stat-card"><span class="stat-label">${label}</span><strong class="stat-value ${valueClass}">${value}</strong>${subtext ? `<span class="stat-sub">${subtext}</span>` : ""}</article>`;
+function statCard(label, value, sub = "", cls = "") {
+  return `<article class="stat-card"><span class="stat-label">${label}</span><strong class="stat-value ${cls}">${value}</strong>${sub ? `<span class="stat-sub">${sub}</span>` : ""}</article>`;
 }
 
 async function ensureCategories() {
   if (!groceryCategories.length) groceryCategories = await api("/api/products/categories");
-  const select = document.getElementById("product-category");
-  select.innerHTML = `<option value="">Uncategorized</option>${groceryCategories.map((cat) => `<option value="${cat}">${cat}</option>`).join("")}`;
+  document.getElementById("product-category").innerHTML = `<option value="">Uncategorized</option>${groceryCategories.map((c) => `<option value="${c}">${c}</option>`).join("")}`;
+}
+
+function chartOpts(price = false) {
+  return { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: "#e8eef7" } } }, scales: { x: { ticks: { color: "#9fb0c7" }, grid: { color: "#2d3a4d" } }, y: { ticks: { color: "#9fb0c7", callback: (v) => price ? `$${v}` : v }, grid: { color: "#2d3a4d" } } } };
 }
 
 function renderProductAnalytics(product) {
   currentProduct = product;
-  const { analytics: a, history } = product;
+  const a = product.analytics;
   document.getElementById("product-title").textContent = product.canonical_name;
-  const aliasText = product.aliases?.length ? ` · aliases: ${product.aliases.join(", ")}` : "";
-  document.getElementById("product-subtitle").textContent = `${product.category || "Uncategorized"}${aliasText}`;
+  document.getElementById("product-subtitle").textContent = [product.category || "Uncategorized", product.aliases?.length ? `aliases: ${product.aliases.join(", ")}` : "", product.normalized_unit_price != null ? `${money(product.normalized_unit_price)}/${product.normalized_unit}` : ""].filter(Boolean).join(" · ");
   document.getElementById("product-category").value = product.category || "";
-  document.getElementById("stats-grid").innerHTML = [
-    renderStatCard("Latest price", money(a.latest_price)),
-    renderStatCard("Average", money(a.avg_price)),
-    renderStatCard("Low / High", `${money(a.min_price)} / ${money(a.max_price)}`),
-    renderStatCard("Since first buy", pct(a.change_since_first_pct), a.first_price != null ? `from ${money(a.first_price)}` : "", pctClass(a.change_since_first_pct)),
-    renderStatCard("Since last buy", pct(a.change_since_previous_pct), "", pctClass(a.change_since_previous_pct)),
-    renderStatCard("Buy frequency", a.avg_days_between_purchases != null ? `~${a.avg_days_between_purchases} days` : "—", "average gap between purchases"),
-  ].join("");
-
-  const labels = history.map((point) => formatDate(point.purchase_date));
-  const prices = history.map((point) => point.effective_price);
-  const avgLine = a.avg_price != null ? history.map(() => a.avg_price) : [];
+  toggleWatchBtn.textContent = product.is_watched ? "★ Watching" : "☆ Watch";
+  document.getElementById("stats-grid").innerHTML = [statCard("Latest", money(a.latest_price)), statCard("Average", money(a.avg_price)), statCard("Low / High", `${money(a.min_price)} / ${money(a.max_price)}`), statCard("Since first", pct(a.change_since_first_pct), "", pctClass(a.change_since_first_pct)), statCard("Since last", pct(a.change_since_previous_pct), "", pctClass(a.change_since_previous_pct)), statCard("Frequency", a.avg_days_between_purchases != null ? `~${a.avg_days_between_purchases}d` : "—")].join("");
   if (priceChart) priceChart.destroy();
-  priceChart = new Chart(document.getElementById("price-chart"), {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
-        { label: "Unit price", data: prices, borderColor: "#5eead4", backgroundColor: "rgba(94, 234, 212, 0.12)", tension: 0.2, fill: true, pointRadius: 4 },
-        { label: "Average", data: avgLine, borderColor: "#fbbf24", borderDash: [6, 4], pointRadius: 0, fill: false },
-      ],
-    },
-    options: chartOptions("Price"),
-  });
-
+  priceChart = new Chart(document.getElementById("price-chart"), { type: "line", data: { labels: product.history.map((p) => formatDate(p.purchase_date)), datasets: [{ label: "Unit price", data: product.history.map((p) => p.effective_price), borderColor: "#5eead4", fill: true, tension: 0.2 }, { label: "Average", data: product.history.map(() => a.avg_price), borderColor: "#fbbf24", borderDash: [6, 4], pointRadius: 0 }] }, options: chartOpts(true) });
+  const storeRows = document.getElementById("store-comparison-rows");
+  storeRows.innerHTML = product.store_comparison?.length ? "" : "<tr><td colspan='4' class='meta'>Need purchases at multiple stores.</td></tr>";
+  product.store_comparison?.forEach((s) => { const tr = document.createElement("tr"); tr.innerHTML = `<td>${s.store}</td><td class="num">${s.purchase_count}</td><td class="num">${money(s.avg_price)}</td><td class="num">${money(s.latest_price)}</td>`; storeRows.appendChild(tr); });
   const changeRows = document.getElementById("change-rows");
-  changeRows.innerHTML = !a.changes.length
-    ? "<tr><td colspan='4' class='meta'>Need at least two purchases to compute changes.</td></tr>"
-    : "";
-  for (const change of [...a.changes].reverse()) {
-    const row = document.createElement("tr");
-    row.innerHTML = `<td>${formatDate(change.from_date)} → ${formatDate(change.to_date)}</td><td class="num">${money(change.from_price)}</td><td class="num">${money(change.to_price)}</td><td class="num ${pctClass(change.change_pct)}">${pct(change.change_pct)}</td>`;
-    changeRows.appendChild(row);
-  }
-
+  changeRows.innerHTML = a.changes.length ? "" : "<tr><td colspan='4' class='meta'>Need two+ purchases.</td></tr>";
+  [...a.changes].reverse().forEach((c) => { const tr = document.createElement("tr"); tr.innerHTML = `<td>${formatDate(c.from_date)} → ${formatDate(c.to_date)}</td><td class="num">${money(c.from_price)}</td><td class="num">${money(c.to_price)}</td><td class="num ${pctClass(c.change_pct)}">${pct(c.change_pct)}</td>`; changeRows.appendChild(tr); });
   const historyRows = document.getElementById("history-rows");
   historyRows.innerHTML = "";
-  for (const point of [...history].reverse()) {
-    const row = document.createElement("tr");
-    row.innerHTML = `<td>${formatDate(point.purchase_date)}</td><td class="num">${money(point.effective_price)}</td><td class="num">${point.quantity}</td><td><button type="button" class="item-link view-receipt-btn">#${point.receipt_id}</button></td>`;
-    row.querySelector(".view-receipt-btn").addEventListener("click", () => showReceipt(point.receipt_id));
-    historyRows.appendChild(row);
-  }
+  [...product.history].reverse().forEach((p) => { const tr = document.createElement("tr"); tr.innerHTML = `<td>${formatDate(p.purchase_date)}</td><td class="num">${money(p.effective_price)}</td><td class="num">${p.quantity}</td><td><button type="button" class="item-link">#${p.receipt_id}</button></td>`; tr.querySelector("button").addEventListener("click", () => showReceipt(p.receipt_id)); historyRows.appendChild(tr); });
 }
 
-function chartOptions(yLabel = "") {
-  return {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { labels: { color: "#e8eef7" } } },
-    scales: {
-      x: { ticks: { color: "#9fb0c7" }, grid: { color: "#2d3a4d" } },
-      y: { ticks: { color: "#9fb0c7", callback: (value) => (yLabel === "Price" || yLabel === "Spend" ? `$${value}` : value) }, grid: { color: "#2d3a4d" } },
-    },
-  };
-}
-
-async function showProduct(productId, options = {}) {
-  const { fromReceipt = false, name = null } = options;
-  selectedProductId = productId;
+async function showProduct(id, { fromReceipt = false, name = null } = {}) {
+  selectedProductId = id;
   await ensureCategories();
-  const product = await api(`/api/products/${productId}`);
+  const product = await api(`/api/products/${id}`);
   if (name) product.canonical_name = name;
   backToReceiptBtn.classList.toggle("hidden", !fromReceipt);
   if (!fromReceipt) setView("prices");
-  else {
-    receiptDetail.classList.add("hidden");
-    productPanel.classList.remove("hidden");
-  }
+  else { receiptDetail.classList.add("hidden"); productPanel.classList.remove("hidden"); }
   renderProductAnalytics(product);
   await loadProducts();
+  await loadWatchlist();
 }
 
 async function loadSpending() {
-  const data = await api("/api/spending/overview");
+  const [data, inflation] = await Promise.all([api("/api/spending/overview"), api("/api/insights/inflation-basket")]);
+  document.getElementById("monthly-budget").value = data.monthly_budget ?? "";
   const s = data.summary;
-  document.getElementById("spending-stats").innerHTML = [
-    renderStatCard("Total spent", money(s.total_spent)),
-    renderStatCard("Trips", String(s.receipt_count)),
-    renderStatCard("Avg trip", money(s.avg_trip_total)),
-    renderStatCard("Avg items / trip", s.avg_items_per_trip != null ? String(s.avg_items_per_trip) : "—"),
-  ].join("");
-
+  document.getElementById("spending-stats").innerHTML = [statCard("Total spent", money(s.total_spent)), statCard("This month", money(data.current_month_spend), data.monthly_budget != null ? `budget ${money(data.monthly_budget)}` : ""), statCard("Budget left", money(data.budget_remaining), "", data.budget_remaining != null && data.budget_remaining < 0 ? "up" : "down"), statCard("Inflation basket", inflation.basket_change_pct != null ? pct(inflation.basket_change_pct) : "—", `${inflation.product_count} products`, pctClass(inflation.basket_change_pct)), statCard("Trips", String(s.receipt_count)), statCard("Avg trip", money(s.avg_trip_total))].join("");
   if (categoryChart) categoryChart.destroy();
-  categoryChart = new Chart(document.getElementById("category-chart"), {
-    type: "doughnut",
-    data: {
-      labels: data.by_category.map((entry) => entry.category),
-      datasets: [{ data: data.by_category.map((entry) => entry.total), backgroundColor: ["#5eead4", "#60a5fa", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c", "#34d399", "#f87171"] }],
-    },
-    options: { plugins: { legend: { position: "bottom", labels: { color: "#e8eef7" } } } },
-  });
-
+  categoryChart = new Chart(document.getElementById("category-chart"), { type: "doughnut", data: { labels: data.by_category.map((e) => e.category), datasets: [{ data: data.by_category.map((e) => e.total), backgroundColor: ["#5eead4", "#60a5fa", "#fbbf24", "#f472b6", "#a78bfa", "#fb923c"] }] }, options: { plugins: { legend: { position: "bottom", labels: { color: "#e8eef7" } } } } });
   if (storeChart) storeChart.destroy();
-  storeChart = new Chart(document.getElementById("store-chart"), {
-    type: "bar",
-    data: {
-      labels: data.by_store.map((entry) => entry.store),
-      datasets: [{ label: "Spend", data: data.by_store.map((entry) => entry.total), backgroundColor: "#5eead4" }],
-    },
-    options: chartOptions("Spend"),
-  });
-
+  storeChart = new Chart(document.getElementById("store-chart"), { type: "bar", data: { labels: data.by_store.map((e) => e.store), datasets: [{ data: data.by_store.map((e) => e.total), backgroundColor: "#5eead4" }] }, options: chartOpts(true) });
   if (monthlyChart) monthlyChart.destroy();
-  monthlyChart = new Chart(document.getElementById("monthly-chart"), {
-    type: "line",
-    data: {
-      labels: data.monthly.map((entry) => entry.month),
-      datasets: [{ label: "Monthly spend", data: data.monthly.map((entry) => entry.total), borderColor: "#60a5fa", backgroundColor: "rgba(96, 165, 250, 0.15)", fill: true, tension: 0.2 }],
-    },
-    options: chartOptions("Spend"),
+  monthlyChart = new Chart(document.getElementById("monthly-chart"), { type: "line", data: { labels: data.monthly.map((e) => e.month), datasets: [{ label: "Monthly spend", data: data.monthly.map((e) => e.total), borderColor: "#60a5fa", fill: true, tension: 0.2 }] }, options: chartOpts(true) });
+}
+
+async function mergeProducts(targetId, sourceIds) {
+  if (!confirm(`Merge ${sourceIds.length} product(s)?`)) return;
+  const product = await api("/api/products/merge", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target_id: targetId, source_ids: sourceIds }) });
+  selectedProductIds.clear();
+  selectedProductId = product.id;
+  await showProduct(product.id, { fromReceipt: false });
+  setStatus("Products merged.", "success");
+}
+
+async function loadMergeSuggestions(llm = false) {
+  mergeSuggestions.innerHTML = "<li class='meta'>Loading...</li>";
+  const suggestions = await api(`/api/products/merge-suggestions${llm ? "?use_llm=true" : ""}`);
+  mergeSuggestions.innerHTML = suggestions.length ? "" : "<li class='meta'>No suggestions.</li>";
+  suggestions.forEach((s) => {
+    const li = document.createElement("li");
+    li.className = "suggestion-item";
+    li.innerHTML = `<span>${s.names.join(" + ")}</span><button type="button" class="secondary small">Merge</button>`;
+    li.querySelector("button").addEventListener("click", () => mergeProducts(s.product_ids[0], s.product_ids.slice(1)));
+    mergeSuggestions.appendChild(li);
   });
 }
 
-document.querySelectorAll(".nav-btn").forEach((btn) => btn.addEventListener("click", () => setView(btn.dataset.view)));
+document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
 document.getElementById("edit-receipt-btn").addEventListener("click", () => setReceiptEditMode(true));
 document.getElementById("cancel-receipt-edit").addEventListener("click", () => setReceiptEditMode(false));
 toggleItemsEditBtn.addEventListener("click", () => setBulkEditMode(!bulkEditMode));
-mergeSelectedBtn.addEventListener("click", () => {
-  const ids = [...selectedProductIds];
-  mergeProducts(ids[0], ids.slice(1));
-});
+mergeSelectedBtn.addEventListener("click", () => { const ids = [...selectedProductIds]; mergeProducts(ids[0], ids.slice(1)); });
 document.getElementById("load-suggestions-btn").addEventListener("click", () => loadMergeSuggestions(false).catch((e) => setStatus(e.message, "error")));
 document.getElementById("ai-suggestions-btn").addEventListener("click", () => loadMergeSuggestions(true).catch((e) => setStatus(e.message, "error")));
+reviewQueueBtn.addEventListener("click", () => { reviewQueueMode = !reviewQueueMode; loadReceipts(); });
+toggleWatchBtn.addEventListener("click", async () => {
+  if (!selectedProductId) return;
+  await api(`/api/products/${selectedProductId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ is_watched: !currentProduct?.is_watched }) });
+  await showProduct(selectedProductId, { fromReceipt: false });
+});
 
-receiptEditForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const totalValue = document.getElementById("edit-total").value;
-  await api(`/api/receipts/${selectedReceiptId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      store_name: document.getElementById("edit-store").value.trim() || null,
-      purchase_date: document.getElementById("edit-date").value || null,
-      total: totalValue === "" ? null : Number(totalValue),
-    }),
-  });
+receiptEditForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  await api(`/api/receipts/${selectedReceiptId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+    store_name: document.getElementById("edit-store").value.trim() || null,
+    purchase_date: document.getElementById("edit-date").value || null,
+    total: document.getElementById("edit-total").value === "" ? null : Number(document.getElementById("edit-total").value),
+    notes: document.getElementById("edit-notes").value.trim() || null,
+  }) });
   setReceiptEditMode(false);
   await showReceipt(selectedReceiptId);
 });
 
-categoryForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!selectedProductId) return;
-  await api(`/api/products/${selectedProductId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ category: document.getElementById("product-category").value || null }),
-  });
+categoryForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  await api(`/api/products/${selectedProductId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ category: document.getElementById("product-category").value || null }) });
   await showProduct(selectedProductId, { fromReceipt: false });
-  setStatus("Category saved.", "success");
+});
+
+budgetForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const val = document.getElementById("monthly-budget").value;
+  await api("/api/settings/budget", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ monthly_budget: val === "" ? null : Number(val) }) });
+  await loadSpending();
+  setStatus("Budget saved.", "success");
 });
 
 document.getElementById("reparse-btn").addEventListener("click", async () => {
-  if (!confirm("Re-parse this receipt from the saved image? Current line items will be replaced.")) return;
-  try {
-    await api(`/api/receipts/${selectedReceiptId}/reparse`, { method: "POST" });
-    setBulkEditMode(false);
-    await showReceipt(selectedReceiptId);
-    setStatus("Receipt re-parsed.", "success");
-  } catch (error) {
-    setStatus(error.message, "error");
-  }
+  if (!confirm("Re-parse from saved image?")) return;
+  await api(`/api/receipts/${selectedReceiptId}/reparse`, { method: "POST" });
+  setBulkEditMode(false);
+  await showReceipt(selectedReceiptId);
 });
 
 document.getElementById("delete-receipt-btn").addEventListener("click", async () => {
-  if (!confirm("Delete this receipt and its image permanently?")) return;
+  if (!confirm("Delete receipt permanently?")) return;
   await api(`/api/receipts/${selectedReceiptId}`, { method: "DELETE" });
   selectedReceiptId = null;
-  currentReceipt = null;
-  setBulkEditMode(false);
   setView("receipts");
-  await loadReceipts();
   setStatus("Receipt deleted.", "success");
 });
 
-backToReceiptBtn.addEventListener("click", async () => {
-  productPanel.classList.add("hidden");
-  if (selectedReceiptId) await showReceipt(selectedReceiptId);
-});
+backToReceiptBtn.addEventListener("click", () => showReceipt(selectedReceiptId));
+productSearch.addEventListener("input", () => loadProducts().catch((e) => setStatus(e.message, "error")));
 
-productSearch.addEventListener("input", () => loadProducts().catch((error) => setStatus(error.message, "error")));
-
-addItemForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  await api(`/api/receipts/${selectedReceiptId}/items`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      raw_name: document.getElementById("new-item-name").value.trim(),
-      quantity: Number(document.getElementById("new-item-qty").value),
-      unit_price: document.getElementById("new-item-unit").value === "" ? null : Number(document.getElementById("new-item-unit").value),
-      line_total: document.getElementById("new-item-total").value === "" ? null : Number(document.getElementById("new-item-total").value),
-    }),
-  });
+addItemForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  await api(`/api/receipts/${selectedReceiptId}/items`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+    raw_name: document.getElementById("new-item-name").value.trim(),
+    quantity: Number(document.getElementById("new-item-qty").value),
+    unit_price: document.getElementById("new-item-unit").value === "" ? null : Number(document.getElementById("new-item-unit").value),
+    line_total: document.getElementById("new-item-total").value === "" ? null : Number(document.getElementById("new-item-total").value),
+  }) });
   addItemForm.reset();
   document.getElementById("new-item-qty").value = "1";
   await showReceipt(selectedReceiptId);
 });
 
-document.getElementById("new-item-qty").addEventListener("input", syncNewItemTotal);
-document.getElementById("new-item-unit").addEventListener("input", syncNewItemTotal);
-
-function syncNewItemTotal() {
-  const qty = Number(document.getElementById("new-item-qty").value);
-  const unit = Number(document.getElementById("new-item-unit").value);
-  if (!Number.isNaN(qty) && !Number.isNaN(unit) && document.getElementById("new-item-unit").value !== "") {
-    document.getElementById("new-item-total").value = (qty * unit).toFixed(2);
-  }
-}
-
-uploadForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const file = document.getElementById("receipt-file").files[0];
-  if (!file) return;
-  const formData = new FormData();
-  formData.append("file", file);
+uploadForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const files = [...document.getElementById("receipt-file").files];
+  if (!files.length) return;
   uploadBtn.disabled = true;
-  setStatus("Parsing receipt with vision model...");
+  setStatus(files.length > 1 ? `Parsing ${files.length} receipts...` : "Parsing receipt...");
   try {
-    const receipt = await api("/api/receipts/upload", { method: "POST", body: formData });
-    setStatus("Receipt saved.", "success");
+    if (files.length === 1) {
+      const fd = new FormData();
+      fd.append("file", files[0]);
+      const receipt = await api("/api/receipts/upload", { method: "POST", body: fd });
+      await showReceipt(receipt.id);
+      setStatus("Receipt saved.", "success");
+    } else {
+      const fd = new FormData();
+      files.forEach((f) => fd.append("files", f));
+      const result = await api("/api/receipts/upload/batch", { method: "POST", body: fd });
+      setStatus(`Saved ${result.saved.length}, failed ${result.failed.length}.`, result.failed.length ? "error" : "success");
+      if (result.saved[0]) await showReceipt(result.saved[0].id);
+    }
     document.getElementById("receipt-file").value = "";
     await loadReceipts();
-    await showReceipt(receipt.id);
-  } catch (error) {
-    setStatus(error.message, "error");
+  } catch (err) {
+    setStatus(err.message, "error");
   } finally {
     uploadBtn.disabled = false;
   }
 });
 
-loadReceipts().catch((error) => setStatus(error.message, "error"));
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+loadReceipts().catch((e) => setStatus(e.message, "error"));
 loadMergeSuggestions().catch(() => {});

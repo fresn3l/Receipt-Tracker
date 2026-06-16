@@ -26,3 +26,13 @@ def on_startup():
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/manifest.json")
+def manifest():
+    return FileResponse(STATIC_DIR / "manifest.json")
+
+
+@app.get("/sw.js")
+def service_worker():
+    return FileResponse(STATIC_DIR / "sw.js")

@@ -3,6 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#5eead4" />
+    <link rel="manifest" href="/manifest.json" />
     <title>Receipt Tracker</title>
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -12,7 +14,7 @@
       <div class="header-row">
         <div>
           <h1>Receipt Tracker</h1>
-          <p>Upload receipts, clean product data, and track grocery prices and spending.</p>
+          <p>Upload receipts, track prices, and manage grocery spending.</p>
         </div>
         <nav class="app-nav" aria-label="Main views">
           <button type="button" class="nav-btn active" data-view="receipts">Receipts</button>
@@ -27,16 +29,24 @@
         <div id="sidebar-receipts">
           <h2>Upload receipt</h2>
           <form id="upload-form">
-            <input type="file" id="receipt-file" accept="image/*" capture="environment" required />
+            <input type="file" id="receipt-file" accept="image/*" capture="environment" multiple />
             <button type="submit" id="upload-btn">Parse &amp; save</button>
           </form>
           <p id="upload-status" class="status"></p>
+          <div class="inline-actions wrap">
+            <button type="button" id="review-queue-btn" class="secondary small">Needs review</button>
+            <a class="button-link secondary small" href="/api/export/csv">Export CSV</a>
+            <a class="button-link secondary small" href="/api/export/json" target="_blank">Export JSON</a>
+          </div>
           <h2>Receipts</h2>
           <ul id="receipt-list" class="list"></ul>
         </div>
 
         <div id="sidebar-prices" class="hidden">
           <h2>Track prices</h2>
+          <div id="alerts-panel" class="alerts-panel hidden"></div>
+          <h3 class="subheading">Watchlist</h3>
+          <ul id="watchlist" class="list compact-list"></ul>
           <input type="search" id="product-search" placeholder="Search groceries..." />
           <div class="merge-toolbar">
             <button type="button" id="merge-selected-btn" class="secondary small" disabled>Merge selected</button>
@@ -49,7 +59,7 @@
 
         <div id="sidebar-spending" class="hidden">
           <h2>Spending</h2>
-          <p class="meta">Overview of grocery spend across trips, stores, and categories.</p>
+          <p class="meta">Budgets, category breakdown, and monthly trends.</p>
         </div>
       </section>
 
@@ -65,11 +75,13 @@
               <div id="detail-view">
                 <h2 id="detail-store">Store</h2>
                 <p id="detail-meta"></p>
+                <p id="detail-notes-view" class="meta hidden"></p>
               </div>
               <form id="receipt-edit-form" class="hidden edit-form">
                 <label>Store <input type="text" id="edit-store" /></label>
                 <label>Date <input type="date" id="edit-date" /></label>
                 <label>Total <input type="number" id="edit-total" step="0.01" min="0" /></label>
+                <label>Notes <input type="text" id="edit-notes" placeholder="Stock-up trip, party..." /></label>
                 <div class="inline-actions">
                   <button type="submit">Save receipt</button>
                   <button type="button" id="cancel-receipt-edit" class="secondary">Cancel</button>
@@ -80,6 +92,7 @@
           </div>
 
           <div id="duplicate-banner" class="validation-banner hidden"></div>
+          <div id="review-banner" class="validation-banner hidden"></div>
           <div id="validation-banner" class="validation-banner hidden"></div>
 
           <div class="toolbar">
@@ -90,9 +103,7 @@
           </div>
 
           <table>
-            <thead>
-              <tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th><th></th></tr>
-            </thead>
+            <thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th><th></th></tr></thead>
             <tbody id="detail-items"></tbody>
           </table>
 
@@ -114,19 +125,25 @@
               <h2 id="product-title">Product</h2>
               <p id="product-subtitle" class="meta"></p>
             </div>
-            <button type="button" id="back-to-receipt" class="secondary hidden">← Back to receipt</button>
+            <div class="inline-actions">
+              <button type="button" id="toggle-watch-btn" class="secondary small">☆ Watch</button>
+              <button type="button" id="back-to-receipt" class="secondary hidden">← Back</button>
+            </div>
           </div>
 
           <form id="category-form" class="category-form">
-            <label>
-              Category
-              <select id="product-category"></select>
-            </label>
+            <label>Category <select id="product-category"></select></label>
             <button type="submit" class="secondary small">Save category</button>
           </form>
 
           <div id="stats-grid" class="stats-grid"></div>
           <div class="chart-wrap"><canvas id="price-chart"></canvas></div>
+
+          <h3>Compare by store</h3>
+          <table>
+            <thead><tr><th>Store</th><th>Buys</th><th>Avg</th><th>Latest</th></tr></thead>
+            <tbody id="store-comparison-rows"></tbody>
+          </table>
 
           <h3>Price changes</h3>
           <table>
@@ -143,6 +160,10 @@
 
         <div id="spending-panel" class="hidden">
           <h2>Spending overview</h2>
+          <form id="budget-form" class="budget-form">
+            <label>Monthly budget <input type="number" id="monthly-budget" step="1" min="0" placeholder="400" /></label>
+            <button type="submit" class="secondary small">Save budget</button>
+          </form>
           <div id="spending-stats" class="stats-grid"></div>
           <div class="spending-charts">
             <div class="chart-card">

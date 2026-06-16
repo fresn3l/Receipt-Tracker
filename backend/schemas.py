@@ -9,6 +9,10 @@ class ParsedLineItem(BaseModel):
     unit_price: float | None = None
     line_total: float | None = None
     category: str | None = None
+    unit_label: str | None = None
+    unit_amount: float | None = None
+    normalized_unit: str | None = None
+    confidence: float | None = None
 
 
 class ParsedReceipt(BaseModel):
@@ -25,6 +29,8 @@ class LineItemOut(BaseModel):
     unit_price: float | None
     line_total: float | None
     product_id: int | None
+    unit_label: str | None = None
+    parse_confidence: float | None = None
 
     model_config = {"from_attributes": True}
 
@@ -46,6 +52,7 @@ class ReceiptSummary(BaseModel):
     item_count: int
     has_warning: bool
     possible_duplicate: bool = False
+    needs_review: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -57,9 +64,12 @@ class ReceiptDetail(BaseModel):
     total: float | None
     image_path: str
     created_at: datetime
+    notes: str | None = None
+    parse_confidence: float | None = None
     line_items: list[LineItemOut]
     validation: ReceiptValidation
     possible_duplicate_ids: list[int] = Field(default_factory=list)
+    needs_review: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -68,6 +78,7 @@ class ReceiptUpdate(BaseModel):
     store_name: str | None = None
     purchase_date: date | None = None
     total: float | None = None
+    notes: str | None = None
 
 
 class LineItemCreate(BaseModel):
@@ -92,6 +103,9 @@ class ProductOut(BaseModel):
     avg_price: float | None
     latest_price: float | None = None
     change_since_previous_pct: float | None = None
+    is_watched: bool = False
+    normalized_unit_price: float | None = None
+    normalized_unit: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -132,13 +146,21 @@ class ProductDetail(BaseModel):
     canonical_name: str
     category: str | None
     aliases: list[str] = Field(default_factory=list)
+    is_watched: bool = False
+    normalized_unit: str | None = None
+    unit_amount: float | None = None
+    normalized_unit_price: float | None = None
     analytics: ProductAnalytics
     history: list[PricePoint]
+    store_comparison: list["StorePriceComparison"] = Field(default_factory=list)
 
 
 class ProductUpdate(BaseModel):
     canonical_name: str | None = None
     category: str | None = None
+    is_watched: bool | None = None
+    normalized_unit: str | None = None
+    unit_amount: float | None = None
 
 
 class ProductMergeRequest(BaseModel):
@@ -182,3 +204,42 @@ class SpendingOverview(BaseModel):
     by_category: list[CategorySpend]
     by_store: list[StoreSpend]
     monthly: list[MonthlySpend]
+    monthly_budget: float | None = None
+    current_month_spend: float | None = None
+    budget_remaining: float | None = None
+
+
+class PriceAlert(BaseModel):
+    product_id: int
+    product_name: str
+    alert_type: str
+    message: str
+    latest_price: float | None
+    change_pct: float | None
+
+
+class StorePriceComparison(BaseModel):
+    store: str
+    purchase_count: int
+    avg_price: float
+    latest_price: float
+
+
+class InflationBasket(BaseModel):
+    basket_change_pct: float | None
+    product_count: int
+
+
+class BudgetSettings(BaseModel):
+    monthly_budget: float | None
+    category_budgets: dict[str, float] = Field(default_factory=dict)
+
+
+class BudgetSettingsUpdate(BaseModel):
+    monthly_budget: float | None = None
+    category_budgets: dict[str, float] | None = None
+
+
+class BatchUploadResult(BaseModel):
+    saved: list[ReceiptDetail]
+    failed: list[dict]

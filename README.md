@@ -42,6 +42,30 @@ Personal, local grocery receipt tracker. Upload receipt photos, extract line ite
 - **Spending tab** — total spent, avg trip, items per trip
 - Charts: spend by category, by store, monthly trend
 
+## Sprint 6 features
+
+- **Watchlist** — pin products and see them in the Price Tracker sidebar
+- **Price alerts** — flags items up 10%+ or at highest recorded price
+- **Cross-store comparison** — per-product store price table
+- **Inflation basket** — weighted average % change across your tracked items
+- **Unit normalization** — parser extracts unit size; shows price per oz/lb/each
+
+## Sprint 7 features
+
+- **Batch upload** — select multiple receipt photos at once
+- **Review queue** — filter receipts needing attention (low confidence, bad totals, duplicates)
+- **Parse confidence** — per-line and per-receipt scores from the vision model
+- **Image preprocessing** — auto-rotate and boost contrast before parsing
+- **Export** — CSV and JSON backup endpoints
+- **Tests** — core analytics, validation, and store normalization
+
+## Sprint 8 features
+
+- **Monthly budget** — set a target and see remaining spend this month
+- **Store normalization** — chains like "TRADER JOE'S #123" → Trader Joe's
+- **Receipt notes** — tag trips ("stock-up", "party", etc.)
+- **PWA** — installable web app with service worker for offline shell
+
 ## Setup
 
 1. Create a virtual environment and install dependencies:
@@ -78,28 +102,29 @@ Both are gitignored and stay on your machine.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/receipts/upload` | Upload and parse a receipt image |
-| GET | `/api/receipts` | List all receipts |
+| POST | `/api/receipts/upload/batch` | Upload multiple receipt images |
+| GET | `/api/receipts` | List all receipts (`?review_only=true`) |
+| GET | `/api/receipts/review-queue` | Receipts needing review |
 | GET | `/api/receipts/{id}` | Receipt detail with line items |
-| PATCH | `/api/receipts/{id}` | Update receipt metadata |
+| PATCH | `/api/receipts/{id}` | Update receipt metadata and notes |
 | DELETE | `/api/receipts/{id}` | Delete receipt and image |
 | POST | `/api/receipts/{id}/reparse` | Re-parse from saved image |
-| GET | `/api/receipts/{id}/image` | Receipt image file |
-| POST | `/api/receipts/{id}/items` | Add a line item |
-| PATCH | `/api/receipts/{id}/items/{item_id}` | Update a line item |
-| DELETE | `/api/receipts/{id}/items/{item_id}` | Delete a line item |
-| GET | `/api/products` | Products with stats (`?q=` search) |
-| GET | `/api/products/merge-suggestions` | Fuzzy or AI merge suggestions |
-| POST | `/api/products/merge` | Merge products into one |
-| POST | `/api/products/cleanup-orphans` | Remove unused products |
-| GET | `/api/products/categories` | Grocery category list |
-| GET | `/api/products/{id}` | Full product detail with analytics |
-| PATCH | `/api/products/{id}` | Update name or category |
-| GET | `/api/products/{id}/price-history` | Price history for charts |
+| GET | `/api/products/watchlist` | Watched products |
+| GET | `/api/insights/alerts` | Price increase alerts |
+| GET | `/api/insights/inflation-basket` | Basket inflation metric |
 | GET | `/api/spending/overview` | Spending summary and chart data |
+| GET/PATCH | `/api/settings/budget` | Monthly budget settings |
+| GET | `/api/export/json` | Export all data as JSON |
+| GET | `/api/export/csv` | Export line items as CSV |
+
+## Tests
+
+```bash
+pytest tests/ -q
+```
 
 ## Next steps
 
-- Price alerts and watchlist
-- Unit normalization ($/oz, $/lb)
-- CSV export / backup
-- Batch receipt upload
+- Category-level budgets in the UI
+- Price alert thresholds (customizable)
+- Batch re-parse for category backfill

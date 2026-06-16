@@ -1,8 +1,10 @@
+import json
+from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -10,10 +12,17 @@ from backend.analytics import compute_product_analytics, effective_unit_price
 from backend.config import RECEIPTS_DIR
 from backend.database import get_db
 from backend.duplicates import find_duplicate_receipts, hash_image
+from backend.export_service import export_csv, export_json
+from backend.image_preprocess import preprocess_receipt_image
 from backend.models import LineItem, Product, ProductAlias, Receipt
 from backend.parser import parse_receipt_image
+from backend.price_intelligence import (
+    get_inflation_basket,
+    get_price_alerts,
+    get_store_comparison,
+    normalized_unit_price,
+)
 from backend.product_service import (
-    add_alias,
     cleanup_orphan_products,
     find_merge_suggestions,
     merge_products,
@@ -26,12 +35,18 @@ from backend.receipt_service import (
     build_receipt_detail,
     delete_receipt_files,
     load_receipt,
+    needs_review,
 )
 from backend.schemas import (
+    BatchUploadResult,
+    BudgetSettings,
+    BudgetSettingsUpdate,
+    InflationBasket,
     LineItemCreate,
     LineItemOut,
     LineItemUpdate,
     MergeSuggestion,
+    PriceAlert,
     PricePoint,
     ProductDetail,
     ProductMergeRequest,
@@ -42,30 +57,17 @@ from backend.schemas import (
     ReceiptUpdate,
     SpendingOverview,
 )
-from backend.spending import (
-    get_spending_summary,
-    monthly_spend,
-    spend_by_category,
-    spend_by_store,
-)
+from backend.settings_service import get_category_budgets, get_settings
+from backend.spending import get_spending_summary, monthly_spend, spend_by_category, spend_by_store
+from backend.store_service import normalize_store_name
 from backend.validation import validate_receipt
 
 router = APIRouter(prefix="/api", tags=["receipts"])
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 GROCERY_CATEGORIES = [
-    "Produce",
-    "Dairy",
-    "Meat",
-    "Seafood",
-    "Bakery",
-    "Frozen",
-    "Beverages",
-    "Snacks",
-    "Pantry",
-    "Household",
-    "Personal Care",
-    "Other",
+    "Produce", "Dairy", "Meat", "Seafood", "Bakery", "Frozen",
+    "Beverages", "Snacks", "Pantry", "Household", "Personal Care", "Other",
 ]
 
 
@@ -76,7 +78,6 @@ def _fetch_product_history(db: Session, product_id: int) -> list[PricePoint]:
         .where(LineItem.product_id == product_id)
         .order_by(Receipt.purchase_date.asc().nullslast(), Receipt.created_at.asc())
     ).all()
-
     history: list[PricePoint] = []
     for item, purchase_date, receipt_id, _created_at in rows:
         point = PricePoint(
@@ -102,6 +103,28 @@ def _product_summary(db: Session, product: Product) -> ProductOut:
         avg_price=analytics.avg_price,
         latest_price=analytics.latest_price,
         change_since_previous_pct=analytics.change_since_previous_pct,
+        is_watched=product.is_watched,
+        normalized_unit=product.normalized_unit,
+        normalized_unit_price=normalized_unit_price(product, analytics.latest_price),
+    )
+
+
+def _product_detail(db: Session, product: Product) -> ProductDetail:
+    history = _fetch_product_history(db, product.id)
+    analytics = compute_product_analytics(history)
+    aliases = db.scalars(select(ProductAlias.alias).where(ProductAlias.product_id == product.id)).all()
+    return ProductDetail(
+        id=product.id,
+        canonical_name=product.canonical_name,
+        category=product.category,
+        aliases=list(aliases),
+        is_watched=product.is_watched,
+        normalized_unit=product.normalized_unit,
+        unit_amount=product.unit_amount,
+        normalized_unit_price=normalized_unit_price(product, analytics.latest_price),
+        analytics=analytics,
+        history=history,
+        store_comparison=get_store_comparison(db, product.id),
     )
 
 
@@ -121,8 +144,32 @@ def _has_duplicate(db: Session, receipt: Receipt) -> bool:
     return bool(_duplicate_ids(db, receipt))
 
 
-@router.post("/receipts/upload", response_model=ReceiptDetail)
-async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def _receipt_summary(db: Session, receipt: Receipt) -> ReceiptSummary:
+    validation = validate_receipt(receipt.total, receipt.line_items)
+    duplicate_ids = _duplicate_ids(db, receipt)
+    return ReceiptSummary(
+        id=receipt.id,
+        store_name=receipt.store_name,
+        purchase_date=receipt.purchase_date,
+        total=receipt.total,
+        created_at=receipt.created_at,
+        item_count=len(receipt.line_items),
+        has_warning=not validation.is_valid,
+        possible_duplicate=bool(duplicate_ids),
+        needs_review=needs_review(receipt, validation, duplicate_ids),
+    )
+
+
+def _current_month_spend(db: Session) -> float:
+    month_key = date.today().strftime("%Y-%m")
+    monthly = monthly_spend(db)
+    for entry in monthly:
+        if entry["month"] == month_key:
+            return entry["total"]
+    return 0.0
+
+
+async def _process_upload(file: UploadFile, db: Session) -> ReceiptDetail:
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Upload a JPG, PNG, or WEBP image.")
@@ -130,7 +177,6 @@ async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get
     RECEIPTS_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"{uuid4().hex}{suffix}"
     image_path = RECEIPTS_DIR / filename
-
     contents = await file.read()
     image_path.write_bytes(contents)
     image_digest = hash_image(contents)
@@ -140,9 +186,10 @@ async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get
         image_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=409,
-            detail=f"This image matches receipt #{existing[0].id}. Delete the duplicate or upload a different photo.",
+            detail=f"This image matches receipt #{existing[0].id}.",
         )
 
+    preprocess_receipt_image(image_path)
     try:
         parsed, raw_json = parse_receipt_image(image_path)
     except Exception as exc:
@@ -154,30 +201,46 @@ async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get
     db.flush()
     apply_parsed_data(db, receipt, parsed, raw_json)
     db.commit()
-
     receipt = load_receipt(db, receipt.id)
-    duplicate_ids = _duplicate_ids(db, receipt)
-    return build_receipt_detail(receipt, duplicate_ids)
+    return build_receipt_detail(receipt, _duplicate_ids(db, receipt))
+
+
+@router.post("/receipts/upload", response_model=ReceiptDetail)
+async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    return await _process_upload(file, db)
+
+
+@router.post("/receipts/upload/batch", response_model=BatchUploadResult)
+async def upload_receipt_batch(files: list[UploadFile] = File(...), db: Session = Depends(get_db)):
+    saved: list[ReceiptDetail] = []
+    failed: list[dict] = []
+    for file in files:
+        try:
+            saved.append(await _process_upload(file, db))
+        except HTTPException as exc:
+            failed.append({"filename": file.filename, "error": exc.detail})
+        except Exception as exc:
+            failed.append({"filename": file.filename, "error": str(exc)})
+    return BatchUploadResult(saved=saved, failed=failed)
 
 
 @router.get("/receipts", response_model=list[ReceiptSummary])
-def list_receipts(db: Session = Depends(get_db)):
+def list_receipts(
+    review_only: bool = Query(False),
+    db: Session = Depends(get_db),
+):
     receipts = db.scalars(
         select(Receipt).options(selectinload(Receipt.line_items)).order_by(Receipt.created_at.desc())
     ).all()
-    return [
-        ReceiptSummary(
-            id=r.id,
-            store_name=r.store_name,
-            purchase_date=r.purchase_date,
-            total=r.total,
-            created_at=r.created_at,
-            item_count=len(r.line_items),
-            has_warning=not validate_receipt(r.total, r.line_items).is_valid,
-            possible_duplicate=_has_duplicate(db, r),
-        )
-        for r in receipts
-    ]
+    summaries = [_receipt_summary(db, receipt) for receipt in receipts]
+    if review_only:
+        summaries = [summary for summary in summaries if summary.needs_review]
+    return summaries
+
+
+@router.get("/receipts/review-queue", response_model=list[ReceiptSummary])
+def review_queue(db: Session = Depends(get_db)):
+    return list_receipts(review_only=True, db=db)
 
 
 @router.get("/receipts/{receipt_id}", response_model=ReceiptDetail)
@@ -195,6 +258,8 @@ def update_receipt(receipt_id: int, payload: ReceiptUpdate, db: Session = Depend
         raise HTTPException(status_code=404, detail="Receipt not found.")
 
     updates = payload.model_dump(exclude_unset=True)
+    if "store_name" in updates:
+        updates["store_name"] = normalize_store_name(updates["store_name"])
     for field, value in updates.items():
         setattr(receipt, field, value)
 
@@ -208,7 +273,6 @@ def delete_receipt(receipt_id: int, db: Session = Depends(get_db)):
     receipt = load_receipt(db, receipt_id)
     if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found.")
-
     delete_receipt_files(receipt)
     db.delete(receipt)
     db.commit()
@@ -222,16 +286,14 @@ def reparse_receipt(receipt_id: int, db: Session = Depends(get_db)):
     receipt = load_receipt(db, receipt_id)
     if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found.")
-
     image_path = Path(receipt.image_path)
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="Receipt image file is missing.")
-
+    preprocess_receipt_image(image_path)
     try:
         parsed, raw_json = parse_receipt_image(image_path)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Failed to parse receipt: {exc}") from exc
-
     apply_parsed_data(db, receipt, parsed, raw_json)
     db.commit()
     receipt = load_receipt(db, receipt_id)
@@ -254,7 +316,6 @@ def add_line_item(receipt_id: int, payload: LineItemCreate, db: Session = Depend
     receipt = load_receipt(db, receipt_id)
     if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found.")
-
     product = resolve_product(db, payload.raw_name)
     item = LineItem(
         receipt_id=receipt.id,
@@ -280,21 +341,17 @@ def update_line_item(
     receipt = load_receipt(db, receipt_id)
     if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found.")
-
     item = next((entry for entry in receipt.line_items if entry.id == item_id), None)
     if not item:
         raise HTTPException(status_code=404, detail="Line item not found.")
-
     updates = payload.model_dump(exclude_unset=True)
     if "raw_name" in updates:
         product = resolve_product(db, updates["raw_name"])
         item.product_id = product.id
         item.raw_name = updates["raw_name"]
-
     for field in ("quantity", "unit_price", "line_total"):
         if field in updates:
             setattr(item, field, updates[field])
-
     db.commit()
     db.refresh(item)
     return item
@@ -305,11 +362,9 @@ def delete_line_item(receipt_id: int, item_id: int, db: Session = Depends(get_db
     receipt = load_receipt(db, receipt_id)
     if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found.")
-
     item = next((entry for entry in receipt.line_items if entry.id == item_id), None)
     if not item:
         raise HTTPException(status_code=404, detail="Line item not found.")
-
     db.delete(item)
     db.commit()
     cleanup_orphan_products(db)
@@ -318,12 +373,23 @@ def delete_line_item(receipt_id: int, item_id: int, db: Session = Depends(get_db
 
 
 @router.get("/products", response_model=list[ProductOut])
-def list_products(q: str | None = Query(None), db: Session = Depends(get_db)):
+def list_products(
+    q: str | None = Query(None),
+    watched_only: bool = Query(False),
+    db: Session = Depends(get_db),
+):
     query = select(Product).order_by(Product.canonical_name)
     if q:
         query = query.where(Product.canonical_name.ilike(f"%{q}%"))
+    if watched_only:
+        query = query.where(Product.is_watched.is_(True))
     products = db.scalars(query).all()
     return [_product_summary(db, product) for product in products]
+
+
+@router.get("/products/watchlist", response_model=list[ProductOut])
+def watchlist(db: Session = Depends(get_db)):
+    return list_products(watched_only=True, db=db)
 
 
 @router.get("/products/merge-suggestions", response_model=list[MergeSuggestion])
@@ -345,17 +411,7 @@ def merge_products_endpoint(payload: ProductMergeRequest, db: Session = Depends(
         db.commit()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    history = _fetch_product_history(db, target.id)
-    aliases = db.scalars(select(ProductAlias.alias).where(ProductAlias.product_id == target.id)).all()
-    return ProductDetail(
-        id=target.id,
-        canonical_name=target.canonical_name,
-        category=target.category,
-        aliases=list(aliases),
-        analytics=compute_product_analytics(history),
-        history=history,
-    )
+    return _product_detail(db, target)
 
 
 @router.post("/products/cleanup-orphans")
@@ -375,17 +431,7 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
     product = db.get(Product, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found.")
-
-    history = _fetch_product_history(db, product_id)
-    aliases = db.scalars(select(ProductAlias.alias).where(ProductAlias.product_id == product_id)).all()
-    return ProductDetail(
-        id=product.id,
-        canonical_name=product.canonical_name,
-        category=product.category,
-        aliases=list(aliases),
-        analytics=compute_product_analytics(history),
-        history=history,
-    )
+    return _product_detail(db, product)
 
 
 @router.patch("/products/{product_id}", response_model=ProductDetail)
@@ -393,13 +439,17 @@ def update_product(product_id: int, payload: ProductUpdate, db: Session = Depend
     product = db.get(Product, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found.")
-
     updates = payload.model_dump(exclude_unset=True)
     if "canonical_name" in updates and updates["canonical_name"]:
         product.canonical_name = updates["canonical_name"].strip()
     if "category" in updates:
         set_product_category(db, product, updates["category"])
-
+    if "is_watched" in updates:
+        product.is_watched = updates["is_watched"]
+    if "normalized_unit" in updates:
+        product.normalized_unit = updates["normalized_unit"]
+    if "unit_amount" in updates:
+        product.unit_amount = updates["unit_amount"]
     db.commit()
     return get_product(product_id, db)
 
@@ -412,11 +462,67 @@ def product_price_history(product_id: int, db: Session = Depends(get_db)):
     return _fetch_product_history(db, product_id)
 
 
+@router.get("/insights/alerts", response_model=list[PriceAlert])
+def price_alerts(db: Session = Depends(get_db)):
+    return get_price_alerts(db)
+
+
+@router.get("/insights/inflation-basket", response_model=InflationBasket)
+def inflation_basket(db: Session = Depends(get_db)):
+    data = get_inflation_basket(db)
+    return InflationBasket(**data)
+
+
 @router.get("/spending/overview", response_model=SpendingOverview)
 def spending_overview(db: Session = Depends(get_db)):
+    settings = get_settings(db)
+    budget = settings.monthly_budget
+    current = _current_month_spend(db)
+    remaining = round(budget - current, 2) if budget is not None else None
     return SpendingOverview(
         summary=get_spending_summary(db),
         by_category=spend_by_category(db),
         by_store=spend_by_store(db),
         monthly=monthly_spend(db),
+        monthly_budget=budget,
+        current_month_spend=round(current, 2),
+        budget_remaining=remaining,
+    )
+
+
+@router.get("/settings/budget", response_model=BudgetSettings)
+def get_budget_settings(db: Session = Depends(get_db)):
+    settings = get_settings(db)
+    return BudgetSettings(
+        monthly_budget=settings.monthly_budget,
+        category_budgets=get_category_budgets(settings),
+    )
+
+
+@router.patch("/settings/budget", response_model=BudgetSettings)
+def update_budget_settings(payload: BudgetSettingsUpdate, db: Session = Depends(get_db)):
+    settings = get_settings(db)
+    updates = payload.model_dump(exclude_unset=True)
+    if "monthly_budget" in updates:
+        settings.monthly_budget = updates["monthly_budget"]
+    if "category_budgets" in updates:
+        settings.category_budgets_json = json.dumps(updates["category_budgets"])
+    db.commit()
+    return BudgetSettings(
+        monthly_budget=settings.monthly_budget,
+        category_budgets=get_category_budgets(settings),
+    )
+
+
+@router.get("/export/json")
+def export_data_json(db: Session = Depends(get_db)):
+    return export_json(db)
+
+
+@router.get("/export/csv")
+def export_data_csv(db: Session = Depends(get_db)):
+    return Response(
+        content=export_csv(db),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=receipts.csv"},
     )

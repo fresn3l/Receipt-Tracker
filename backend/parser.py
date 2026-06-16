@@ -21,7 +21,11 @@ Return JSON with this exact shape:
       "quantity": 1,
       "unit_price": 3.99,
       "line_total": 3.99,
-      "category": "Produce"
+      "category": "Produce",
+      "unit_label": "16 oz",
+      "unit_amount": 16,
+      "normalized_unit": "oz",
+      "confidence": 0.95
     }
   ]
 }
@@ -36,7 +40,11 @@ Rules:
 - purchase_date should be ISO format if visible.
 - total is the final amount paid if visible.
 - Return valid JSON only.
-- category should be one of the listed categories for each line item."""
+- category should be one of the listed categories for each line item.
+- unit_label is size text from receipt when visible (e.g. 16 oz, 1 gal).
+- unit_amount is numeric size (16 for 16 oz).
+- normalized_unit is oz, lb, each, L, or null.
+- confidence is 0.0-1.0 for how sure you are about that line item."""
 
 
 def _encode_image(image_path: Path) -> str:

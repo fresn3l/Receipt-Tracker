@@ -420,6 +420,72 @@ td.num {
   height: 220px;
 }
 
+.subheading {
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+}
+
+.compact-list .meta {
+  font-size: 0.8rem;
+}
+
+.alerts-panel {
+  background: rgba(127, 29, 29, 0.15);
+  border: 1px solid #991b1b;
+  border-radius: 10px;
+  padding: 0.65rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.alert-item {
+  margin-top: 0.35rem;
+}
+
+.low-confidence {
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.budget-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: end;
+  margin-bottom: 1rem;
+}
+
+.budget-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.budget-form input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  border-radius: 8px;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.inline-actions.wrap {
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
 .inline-actions,
 .row-actions {
   display: flex;
