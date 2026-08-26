@@ -7,3 +7,5 @@ venv/
 data/
 .DS_Store
 *.db
+dist/
+build/
