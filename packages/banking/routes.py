@@ -63,6 +63,21 @@ class TestRuleBody(BaseModel):
     test_strings: list[str] = Field(default_factory=list)
 
 
+class AssignAccountBody(BaseModel):
+    transaction_ids: list[str]
+    account: str
+
+
+class AccountBody(BaseModel):
+    name: str
+    account_type: str = "other"
+
+
+class AccountUpdateBody(BaseModel):
+    name: Optional[str] = None
+    account_type: Optional[str] = None
+
+
 @router.get("/health")
 def bank_health():
     service.init_workflow()
@@ -98,25 +113,61 @@ async def import_csv(
     return result
 
 
+@router.get("/accounts")
+def list_accounts():
+    return service.list_accounts()
+
+
+@router.post("/accounts")
+def create_account(body: AccountBody):
+    return service.create_account(body.name, body.account_type)
+
+
+@router.patch("/accounts/{account_id}")
+def update_account(account_id: str, body: AccountUpdateBody):
+    result = service.update_account(account_id, name=body.name, account_type=body.account_type)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", "Not found"))
+    return result
+
+
+@router.delete("/accounts/{account_id}")
+def delete_account(account_id: str):
+    return service.delete_account(account_id)
+
+
+@router.post("/transactions/assign-account")
+def assign_account(body: AssignAccountBody):
+    return service.assign_account_to_transactions(body.transaction_ids, body.account)
+
+
+@router.get("/credit-cards/monthly")
+def credit_card_monthly():
+    return service.get_credit_card_monthly()
+
+
 @router.get("/transactions")
-def get_transactions(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=1000)):
-    return service.get_transactions(page=page, per_page=per_page)
+def get_transactions(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=1000),
+    account: Optional[str] = None,
+):
+    return service.get_transactions(page=page, per_page=per_page, account=account)
 
 
 @router.get("/stats")
-def get_stats():
-    return service.get_overall_stats()
+def get_stats(account: Optional[str] = None):
+    return service.get_overall_stats(account=account)
 
 
 @router.get("/monthly-summaries")
-def monthly_summaries():
-    return service.get_monthly_summaries()
+def monthly_summaries(account: Optional[str] = None):
+    return service.get_monthly_summaries(account=account)
 
 
 @router.get("/category-breakdown")
-def category_breakdown():
-    return service.get_category_breakdown()
-
+def category_breakdown(account: Optional[str] = None):
+    return service.get_category_breakdown(account=account)
 
 @router.get("/spending-patterns")
 def spending_patterns():

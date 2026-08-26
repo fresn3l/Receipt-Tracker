@@ -810,6 +810,131 @@ body {
     font-style: italic;
 }
 
+.account-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+
+.filter-label {
+    font-size: 0.85rem;
+    color: #64748b;
+    font-weight: 600;
+}
+
+.account-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.account-chip {
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    border-radius: 999px;
+    padding: 0.35rem 0.85rem;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.85rem;
+}
+
+.account-chip.active {
+    background: #0f766e;
+    border-color: #0f766e;
+    color: #fff;
+}
+
+.credit-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+}
+
+.credit-card-panel {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 1rem 1.15rem;
+}
+
+.credit-card-panel h3 {
+    margin: 0 0 0.35rem;
+}
+
+.card-total {
+    margin: 0 0 0.85rem;
+    color: #64748b;
+    font-size: 0.9rem;
+}
+
+.card-month-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.card-month-table th,
+.card-month-table td {
+    text-align: left;
+    padding: 0.4rem 0.25rem;
+    border-bottom: 1px solid #f1f5f9;
+}
+
+.add-account-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.add-account-form input,
+.add-account-form select {
+    padding: 0.55rem 0.7rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+}
+
+.accounts-list {
+    display: grid;
+    gap: 0.65rem;
+}
+
+.account-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: center;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 0.85rem 1rem;
+}
+
+.account-type-label {
+    font-size: 0.8rem;
+    color: #64748b;
+    text-transform: capitalize;
+    margin-top: 0.2rem;
+}
+
+.account-select-label {
+    display: grid;
+    gap: 0.35rem;
+}
+
+.account-select-label select {
+    min-width: 220px;
+    padding: 0.5rem;
+}
+
+.cards-header p,
+.accounts-header p {
+    color: #64748b;
+    margin-top: 0.25rem;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .budgets-grid {

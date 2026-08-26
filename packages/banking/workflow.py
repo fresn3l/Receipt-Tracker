@@ -73,6 +73,7 @@ class FinanceTrackerWorkflow:
         overwrite_categories: bool = False,
         check_duplicates: bool = True,
         skip_duplicates: bool = True,
+        account: Optional[str] = None,
     ) -> tuple[List[Transaction], dict]:
         """
         Process a CSV file: parse, categorize, and store.
@@ -83,15 +84,24 @@ class FinanceTrackerWorkflow:
             overwrite_categories: Whether to overwrite existing categories
             check_duplicates: Whether to check for duplicates
             skip_duplicates: Whether to skip duplicate transactions
+            account: Optional account name to stamp on imported transactions
 
         Returns:
             Tuple of (processed transactions, statistics dict)
         """
         logger.info(f"Processing CSV file: {csv_file}")
 
+        account_name = account or self.account
+        parser = CSVParser(account=account_name) if account_name else self.parser
+
         # Parse CSV
         logger.info("Parsing CSV file...")
-        transactions = self.parser.parse(csv_file)
+        transactions = parser.parse(csv_file)
+        if account_name:
+            stamped = []
+            for txn in transactions:
+                stamped.append(txn.model_copy(update={"account": account_name}))
+            transactions = stamped
         logger.info(f"Parsed {len(transactions)} transactions")
 
         # Check for duplicates
@@ -103,14 +113,7 @@ class FinanceTrackerWorkflow:
                 if skip_duplicates:
                     # Create a helper function to get transaction ID
                     def get_txn_id(t):
-                        parts = [
-                            t.date.isoformat(),
-                            str(t.amount),
-                            t.description.strip().lower(),
-                        ]
-                        if t.reference:
-                            parts.append(t.reference)
-                        return "|".join(parts)
+                        return self.storage.transaction_repo.transaction_id(t)
 
                     transaction_ids = {get_txn_id(t) for t in duplicates}
                     transactions = [
@@ -142,6 +145,7 @@ class FinanceTrackerWorkflow:
             "new_transactions": len(transactions),
             "duplicates_found": len(duplicates),
             "duplicates_skipped": len(duplicates) if skip_duplicates else 0,
+            "account": account_name,
         }
 
         if stats:

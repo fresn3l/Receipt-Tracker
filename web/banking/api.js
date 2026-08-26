@@ -48,15 +48,55 @@
       return request("/api/bank/import", { method: "POST", body: fd });
     }),
 
-    get_transactions: wrap(async (page = 1, perPage = 50) =>
-      request(`/api/bank/transactions?page=${page}&per_page=${perPage}`)
+    get_transactions: wrap(async (page = 1, perPage = 50, account = null) => {
+      const params = new URLSearchParams({ page, per_page: perPage });
+      if (account) params.set("account", account);
+      return request(`/api/bank/transactions?${params}`);
+    }),
+
+    get_overall_stats: wrap(async (account = null) => {
+      const params = account ? `?account=${encodeURIComponent(account)}` : "";
+      return request(`/api/bank/stats${params}`);
+    }),
+
+    get_monthly_summaries: wrap(async (account = null) => {
+      const params = account ? `?account=${encodeURIComponent(account)}` : "";
+      return request(`/api/bank/monthly-summaries${params}`);
+    }),
+
+    get_category_breakdown: wrap(async (account = null) => {
+      const params = account ? `?account=${encodeURIComponent(account)}` : "";
+      return request(`/api/bank/category-breakdown${params}`);
+    }),
+
+    list_accounts: wrap(async () => request("/api/bank/accounts")),
+
+    create_account: wrap(async (name, accountType = "other") =>
+      request("/api/bank/accounts", {
+        method: "POST",
+        body: { name, account_type: accountType },
+      })
     ),
 
-    get_overall_stats: wrap(async () => request("/api/bank/stats")),
+    update_account: wrap(async (id, name, accountType) =>
+      request(`/api/bank/accounts/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: { name, account_type: accountType },
+      })
+    ),
 
-    get_monthly_summaries: wrap(async () => request("/api/bank/monthly-summaries")),
+    delete_account: wrap(async (id) =>
+      request(`/api/bank/accounts/${encodeURIComponent(id)}`, { method: "DELETE" })
+    ),
 
-    get_category_breakdown: wrap(async () => request("/api/bank/category-breakdown")),
+    get_credit_card_monthly: wrap(async () => request("/api/bank/credit-cards/monthly")),
+
+    assign_account_to_transactions: wrap(async (ids, account) =>
+      request("/api/bank/transactions/assign-account", {
+        method: "POST",
+        body: { transaction_ids: ids, account },
+      })
+    ),
 
     get_spending_patterns: wrap(async () => request("/api/bank/spending-patterns")),
 

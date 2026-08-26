@@ -15,6 +15,8 @@
             <nav class="nav-tabs">
                 <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
                 <button class="tab-btn" data-tab="transactions">Transactions</button>
+                <button class="tab-btn" data-tab="cards">Credit Cards</button>
+                <button class="tab-btn" data-tab="accounts">Accounts</button>
                 <button class="tab-btn" data-tab="categories">Categories</button>
                 <button class="tab-btn" data-tab="budgets">Budgets</button>
                 <button class="tab-btn" data-tab="recurring">Recurring</button>
@@ -25,6 +27,10 @@
 
         <!-- Dashboard Tab -->
         <div id="dashboard" class="tab-content active">
+            <div class="account-filter-bar">
+                <span class="filter-label">Account</span>
+                <div id="dashboard-account-chips" class="account-chips"></div>
+            </div>
             <div class="stats-grid">
                 <div class="stat-card">
                     <h3>Total Income</h3>
@@ -69,6 +75,9 @@
                     <button class="btn btn-secondary btn-small" onclick="toggleAdvancedSearch()">Advanced</button>
                 </div>
                 <div class="filters">
+                    <select id="account-filter">
+                        <option value="">All Accounts</option>
+                    </select>
                     <select id="category-filter">
                         <option value="">All Categories</option>
                     </select>
@@ -127,6 +136,7 @@
                             <th>Date</th>
                             <th>Description</th>
                             <th>Category</th>
+                            <th>Account</th>
                             <th>Amount</th>
                             <th>Type</th>
                             <th>Actions</th>
@@ -175,8 +185,11 @@
                         <input type="checkbox" id="check-duplicates" checked>
                         Check for duplicates
                     </label>
-                    <label>
-                        <input type="text" id="account-name" placeholder="Account name (optional)">
+                    <label class="account-select-label">
+                        Account (required)
+                        <select id="account-name">
+                            <option value="">Select account…</option>
+                        </select>
                     </label>
                 </div>
 
@@ -191,6 +204,34 @@
                 <h3>Recent Imports</h3>
                 <div id="recent-imports-list"></div>
             </div>
+        </div>
+
+        <!-- Credit Cards Tab -->
+        <div id="cards" class="tab-content">
+            <div class="cards-header">
+                <h2>Credit Card Monthly Breakdown</h2>
+                <p>Spending by month for each credit card account.</p>
+            </div>
+            <div id="credit-cards-monthly" class="credit-cards-grid"></div>
+        </div>
+
+        <!-- Accounts Tab -->
+        <div id="accounts" class="tab-content">
+            <div class="accounts-header">
+                <h2>Accounts</h2>
+                <p>Manage checking and credit card accounts. Tag each CSV import with the right account.</p>
+            </div>
+            <form id="add-account-form" class="add-account-form">
+                <input type="text" id="new-account-name" placeholder="Account name" required>
+                <select id="new-account-type">
+                    <option value="checking">Checking</option>
+                    <option value="credit_card">Credit Card</option>
+                    <option value="savings">Savings</option>
+                    <option value="other">Other</option>
+                </select>
+                <button type="submit" class="btn btn-primary">Add account</button>
+            </form>
+            <div id="accounts-list" class="accounts-list"></div>
         </div>
 
         <!-- Budgets Tab -->
