@@ -38,15 +38,17 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 
+from banking.accounts import Account, AccountType
 from banking.budget_tracker import BudgetRepository, BudgetTracker
 from banking.category_rules_manager import CategoryRulesManager
 from banking.config import get_config
 from banking.logging_config import setup_logging
-from banking.models import Budget, BudgetTemplate, Category, SplitTransaction
+from banking.models import Budget, BudgetTemplate, Category, SplitTransaction, Transaction
 from banking.recurring_detector import RecurringTransactionDetector
 from banking.search_filter import TransactionSearchFilter
 from banking.transaction_editor import TransactionEditor
 from banking.workflow import FinanceTrackerWorkflow
+from banking.analyzer import SpendingAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +133,7 @@ def import_csv_file(
             overwrite_categories=overwrite,
             check_duplicates=check_duplicates,
             skip_duplicates=skip_duplicates,
+            account=account,
         )
 
         return {
@@ -139,19 +142,28 @@ def import_csv_file(
             "duplicates_found": stats.get("duplicates_found", 0),
             "categorized": stats.get("categorized", 0),
             "categorization_rate": stats.get("categorization_rate", 0),
+            "account": stats.get("account"),
         }
     except Exception as e:
         logger.error(f"Error importing CSV: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
 
 
-def get_transactions(page: int = 1, per_page: int = 50) -> List[Dict]:
+def _filter_by_account(transactions: List[Transaction], account: Optional[str]) -> List[Transaction]:
+    if not account:
+        return transactions
+    needle = account.strip().lower()
+    return [t for t in transactions if (t.account or "").strip().lower() == needle]
+
+
+def get_transactions(page: int = 1, per_page: int = 50, account: Optional[str] = None) -> List[Dict]:
     """
     Get paginated transactions.
 
     Args:
         page: Page number (1-indexed)
         per_page: Number of transactions per page
+        account: Optional account name filter
 
     Returns:
         List of transaction dictionaries
@@ -160,7 +172,7 @@ def get_transactions(page: int = 1, per_page: int = 50) -> List[Dict]:
         init_workflow()
 
     try:
-        transactions = workflow.storage.transaction_repo.load_all()
+        transactions = _filter_by_account(workflow.storage.transaction_repo.load_all(), account)
         
         # Sort by date (newest first)
         transactions.sort(key=lambda t: t.date, reverse=True)
@@ -199,7 +211,7 @@ def get_transactions(page: int = 1, per_page: int = 50) -> List[Dict]:
         return []
 
 
-def get_overall_stats() -> Dict:
+def get_overall_stats(account: Optional[str] = None) -> Dict:
     """
     Get overall statistics.
 
@@ -210,7 +222,8 @@ def get_overall_stats() -> Dict:
         init_workflow()
 
     try:
-        analyzer = workflow.analyze_spending()
+        transactions = _filter_by_account(workflow.storage.transaction_repo.load_all(), account)
+        analyzer = SpendingAnalyzer(transactions)
         total_income = analyzer.get_total_income()
         total_expenses = analyzer.get_total_expenses()
         net_amount = analyzer.get_net_amount()
@@ -224,6 +237,7 @@ def get_overall_stats() -> Dict:
             "total_expenses": str(total_expenses),
             "net_amount": str(net_amount),
             "savings_rate": savings_rate,
+            "account": account,
         }
     except Exception as e:
         logger.error(f"Error getting stats: {e}", exc_info=True)
@@ -232,10 +246,11 @@ def get_overall_stats() -> Dict:
             "total_expenses": "0",
             "net_amount": "0",
             "savings_rate": 0,
+            "account": account,
         }
 
 
-def get_monthly_summaries() -> List[Dict]:
+def get_monthly_summaries(account: Optional[str] = None) -> List[Dict]:
     """
     Get all monthly summaries.
 
@@ -246,7 +261,8 @@ def get_monthly_summaries() -> List[Dict]:
         init_workflow()
 
     try:
-        analyzer = workflow.analyze_spending()
+        transactions = _filter_by_account(workflow.storage.transaction_repo.load_all(), account)
+        analyzer = SpendingAnalyzer(transactions)
         summaries = analyzer.get_all_monthly_summaries()
         
         result = []
@@ -270,7 +286,7 @@ def get_monthly_summaries() -> List[Dict]:
         return []
 
 
-def get_category_breakdown() -> Dict[str, str]:
+def get_category_breakdown(account: Optional[str] = None) -> Dict[str, str]:
     """
     Get category breakdown.
 
@@ -281,7 +297,8 @@ def get_category_breakdown() -> Dict[str, str]:
         init_workflow()
 
     try:
-        analyzer = workflow.analyze_spending()
+        transactions = _filter_by_account(workflow.storage.transaction_repo.load_all(), account)
+        analyzer = SpendingAnalyzer(transactions)
         breakdown = analyzer.get_category_breakdown()
         return {k: str(v) for k, v in breakdown.items()}
     except Exception as e:
@@ -877,4 +894,112 @@ def _transaction_to_dict(transaction) -> Dict:
         result["balance"] = str(transaction.balance)
     return result
 
+
+def list_accounts() -> List[Dict]:
+    if workflow is None:
+        init_workflow()
+    accounts = workflow.storage.account_repo.ensure_defaults()
+    return [a.model_dump() for a in accounts]
+
+
+def create_account(name: str, account_type: str = "other") -> Dict:
+    if workflow is None:
+        init_workflow()
+    try:
+        atype = AccountType(account_type)
+    except ValueError:
+        atype = AccountType.OTHER
+    account = Account(name=name.strip(), account_type=atype)
+    saved = workflow.storage.account_repo.upsert(account)
+    return {"success": True, "account": saved.model_dump()}
+
+
+def update_account(account_id: str, name: Optional[str] = None, account_type: Optional[str] = None) -> Dict:
+    if workflow is None:
+        init_workflow()
+    existing = workflow.storage.account_repo.get(account_id)
+    if not existing:
+        return {"success": False, "error": "Account not found"}
+    new_name = name.strip() if name else existing.name
+    new_type = existing.account_type
+    if account_type:
+        try:
+            new_type = AccountType(account_type)
+        except ValueError:
+            pass
+    updated = Account(id=existing.id, name=new_name, account_type=new_type)
+    # If renamed, retag transactions that used the old name
+    if new_name != existing.name:
+        txns = workflow.storage.transaction_repo.load_all()
+        changed = False
+        for i, txn in enumerate(txns):
+            if (txn.account or "") == existing.name:
+                txns[i] = txn.model_copy(update={"account": new_name})
+                changed = True
+        if changed:
+            workflow.storage.transaction_repo._save_all(txns)
+    workflow.storage.account_repo.upsert(updated)
+    return {"success": True, "account": updated.model_dump()}
+
+
+def delete_account(account_id: str) -> Dict:
+    if workflow is None:
+        init_workflow()
+    ok = workflow.storage.account_repo.delete(account_id)
+    return {"success": ok}
+
+
+def assign_account_to_transactions(transaction_ids: List[str], account: str) -> Dict:
+    if workflow is None:
+        init_workflow()
+    txns = workflow.storage.transaction_repo.load_all()
+    ids = set(transaction_ids)
+    updated = 0
+    for i, txn in enumerate(txns):
+        if txn.id in ids:
+            txns[i] = txn.model_copy(update={"account": account})
+            updated += 1
+    if updated:
+        workflow.storage.transaction_repo._save_all(txns)
+    return {"success": True, "updated_count": updated}
+
+
+def get_credit_card_monthly() -> Dict:
+    """Monthly expense breakdown for each credit-card account."""
+    from decimal import Decimal
+
+    if workflow is None:
+        init_workflow()
+    accounts = [
+        a for a in workflow.storage.account_repo.ensure_defaults()
+        if a.account_type == AccountType.CREDIT_CARD
+    ]
+    all_txns = workflow.storage.transaction_repo.load_all()
+    cards = []
+    for account in accounts:
+        filtered = _filter_by_account(all_txns, account.name)
+        analyzer = SpendingAnalyzer(filtered)
+        summaries = analyzer.get_all_monthly_summaries()
+        months = [
+            {
+                "year": s.year,
+                "month": s.month,
+                "total_expenses": str(s.total_expenses),
+                "total_income": str(s.total_income),
+                "net_amount": str(s.net_amount),
+                "transaction_count": s.transaction_count,
+                "category_breakdown": {k: str(v) for k, v in s.category_breakdown.items()},
+            }
+            for s in summaries
+        ]
+        total_spend = sum((t.absolute_amount for t in filtered if t.is_expense), Decimal("0"))
+        cards.append(
+            {
+                "account": account.model_dump(),
+                "transaction_count": len(filtered),
+                "total_expenses": str(total_spend),
+                "months": months,
+            }
+        )
+    return {"cards": cards}
 

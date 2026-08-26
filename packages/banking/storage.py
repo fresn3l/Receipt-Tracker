@@ -46,6 +46,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
+from banking.accounts import AccountRepository
 from banking.models import Category, Transaction
 
 logger = logging.getLogger(__name__)
@@ -322,6 +323,8 @@ class TransactionRepository:
         # Add reference if available (some banks include transaction IDs)
         if transaction.reference:
             parts.append(transaction.reference)
+        if transaction.account:
+            parts.append(transaction.account.strip().lower())
         # Use pipe separator (unlikely to appear in transaction data)
         return "|".join(parts)
 
@@ -503,6 +506,8 @@ class StorageManager:
         self.data_dir = Path(data_dir)
         self.transaction_repo = TransactionRepository(self.data_dir)
         self.category_repo = CategoryRepository(self.data_dir)
+        self.account_repo = AccountRepository(self.data_dir)
+        self.account_repo.ensure_defaults()
 
     def export_transactions_json(self, output_file: Path) -> None:
         """

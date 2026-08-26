@@ -5,15 +5,19 @@ let categoryChart = null;
 let topCategoriesChart = null;
 let currentPage = 1;
 const itemsPerPage = 50;
+let currentAccountFilter = '';
+let knownAccounts = [];
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
     setupTabs();
     setupFileUpload();
+    await refreshAccounts();
     await loadDashboard();
     await loadTransactions();
     await loadCategories();
     await loadCategoryRules();
+    setupAccountUI();
 });
 
 // Tab Navigation
@@ -36,6 +40,12 @@ function setupTabs() {
                     content.classList.add('active');
                 }
             });
+
+            if (targetTab === 'cards') loadCreditCardsMonthly();
+            if (targetTab === 'accounts') loadAccountsTab();
+            if (targetTab === 'dashboard') loadDashboard();
+            if (targetTab === 'transactions') loadTransactions(currentPage);
+            if (targetTab === 'import') populateAccountSelects();
         });
     });
 }
@@ -93,55 +103,35 @@ async function importCSV() {
         showStatus('Please select a file', 'error');
         return;
     }
+    if (!accountName) {
+        showStatus('Select an account before importing (Checking or a credit card).', 'error');
+        return;
+    }
 
     showLoading(true);
     statusDiv.style.display = 'none';
 
     try {
-        // Use Eel's file dialog or get file path
-        let filePath;
-        try {
-            // Try to get file path from Eel file dialog
-            filePath = await eel.select_file()();
-        } catch (e) {
-            // Fallback: use file input
-            const file = fileInput.files[0];
-            // For Eel, we need the actual file path, not just the name
-            // This will work if the file is in a known location
-            filePath = file.name;
-        }
-        
-        if (!filePath) {
-            // If no file selected via dialog, use the file input
-            const file = fileInput.files[0];
-            filePath = file.name;
-        }
-        
         const result = await eel.import_csv_file(
-            filePath,
+            null,
             accountName,
             autoCategorize,
-            false, // overwrite
+            false,
             checkDuplicates,
-            true  // skip duplicates
+            true
         )();
 
         if (result.success) {
-            showStatus(`Successfully imported ${result.new_transactions} transactions!`, 'success');
-            
-            // Reset form
+            showStatus(`Imported ${result.new_transactions} into ${result.account || accountName}.`, 'success');
             fileInput.value = '';
             document.getElementById('file-name').textContent = '';
             document.getElementById('import-btn').disabled = true;
-            
-            // Reload data
             await loadDashboard();
             await loadTransactions();
             await loadCategories();
         } else {
             showStatus(`Error: ${result.error || 'Unknown error'}`, 'error');
         }
-        
     } catch (error) {
         showStatus(`Error: ${error.message || error}`, 'error');
     } finally {
@@ -159,14 +149,16 @@ function showStatus(message, type) {
 // Load Dashboard
 async function loadDashboard() {
     try {
-        const stats = await eel.get_overall_stats()();
+        renderDashboardAccountChips();
+        const account = currentAccountFilter || null;
+        const stats = await eel.get_overall_stats(account)();
         updateStats(stats);
         
-        const summaries = await eel.get_monthly_summaries()();
+        const summaries = await eel.get_monthly_summaries(account)();
         updateMonthlySummaries(summaries);
         updateMonthlyChart(summaries);
         
-        const categoryBreakdown = await eel.get_category_breakdown()();
+        const categoryBreakdown = await eel.get_category_breakdown(account)();
         updateCategoryChart(categoryBreakdown);
     } catch (error) {
         console.error('Error loading dashboard:', error);
@@ -316,9 +308,13 @@ function updateMonthlySummaries(summaries) {
 // Load Transactions
 async function loadTransactions(page = 1) {
     try {
-        const transactions = await eel.get_transactions(page, itemsPerPage)();
+        currentPage = page;
+        const accountFilter = document.getElementById('account-filter');
+        const account = (accountFilter && accountFilter.value) || currentAccountFilter || null;
+        const transactions = await eel.get_transactions(page, itemsPerPage, account || null)();
         displayTransactions(transactions);
         updatePagination(transactions.length);
+        populateAccountSelects();
     } catch (error) {
         console.error('Error loading transactions:', error);
     }
@@ -328,8 +324,8 @@ function displayTransactions(transactions) {
     const tbody = document.getElementById('transactions-tbody');
     tbody.innerHTML = '';
     
-    if (transactions.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No transactions found.</td></tr>';
+            if (transactions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No transactions found.</td></tr>';
         return;
     }
     
@@ -344,6 +340,7 @@ function displayTransactions(transactions) {
             <td>${txn.date}</td>
             <td>${txn.description} ${txn.is_recurring ? '🔄' : ''}</td>
             <td>${txn.category ? txn.category.name : '<span class="uncategorized">Uncategorized</span>'}</td>
+            <td>${txn.account || '<span class="uncategorized">—</span>'}</td>
             <td class="${amountClass}">${formatCurrency(Math.abs(amount))}</td>
             <td><span class="badge">${txn.transaction_type}</span></td>
             <td>
@@ -1075,4 +1072,163 @@ window.onclick = function(event) {
     }
 }
 
+// ========== Accounts ==========
+
+async function refreshAccounts() {
+    try {
+        knownAccounts = await eel.list_accounts()();
+        populateAccountSelects();
+        renderDashboardAccountChips();
+    } catch (error) {
+        console.error('Error loading accounts:', error);
+        knownAccounts = [];
+    }
+}
+
+function populateAccountSelects() {
+    const options = '<option value="">All Accounts</option>' +
+        knownAccounts.map(a => `<option value="${a.name}">${a.name} (${a.account_type.replace('_', ' ')})</option>`).join('');
+    const importOptions = '<option value="">Select account…</option>' +
+        knownAccounts.map(a => `<option value="${a.name}">${a.name} (${a.account_type.replace('_', ' ')})</option>`).join('');
+
+    const accountFilter = document.getElementById('account-filter');
+    const searchAccount = document.getElementById('search-account');
+    const importAccount = document.getElementById('account-name');
+
+    if (accountFilter) {
+        const prev = accountFilter.value;
+        accountFilter.innerHTML = options;
+        accountFilter.value = prev || currentAccountFilter || '';
+    }
+    if (searchAccount) {
+        const prev = searchAccount.value;
+        searchAccount.innerHTML = options;
+        searchAccount.value = prev;
+    }
+    if (importAccount && importAccount.tagName === 'SELECT') {
+        const prev = importAccount.value;
+        importAccount.innerHTML = importOptions;
+        importAccount.value = prev;
+    }
+}
+
+function renderDashboardAccountChips() {
+    const container = document.getElementById('dashboard-account-chips');
+    if (!container) return;
+    const chips = [{ name: '', label: 'All' }].concat(
+        knownAccounts.map(a => ({ name: a.name, label: a.name }))
+    );
+    container.innerHTML = chips.map(chip => `
+        <button type="button" class="account-chip ${currentAccountFilter === chip.name ? 'active' : ''}"
+            data-account="${chip.name}">${chip.label}</button>
+    `).join('');
+    container.querySelectorAll('.account-chip').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            currentAccountFilter = btn.getAttribute('data-account') || '';
+            const accountFilter = document.getElementById('account-filter');
+            if (accountFilter) accountFilter.value = currentAccountFilter;
+            await loadDashboard();
+        });
+    });
+}
+
+function setupAccountUI() {
+    const form = document.getElementById('add-account-form');
+    if (form) {
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('new-account-name').value.trim();
+            const type = document.getElementById('new-account-type').value;
+            if (!name) return;
+            await eel.create_account(name, type)();
+            document.getElementById('new-account-name').value = '';
+            await refreshAccounts();
+            await loadAccountsTab();
+        });
+    }
+    const accountFilter = document.getElementById('account-filter');
+    if (accountFilter) {
+        accountFilter.addEventListener('change', async () => {
+            currentAccountFilter = accountFilter.value || '';
+            await loadTransactions(1);
+            await loadDashboard();
+        });
+    }
+}
+
+async function loadAccountsTab() {
+    await refreshAccounts();
+    const list = document.getElementById('accounts-list');
+    if (!list) return;
+    if (!knownAccounts.length) {
+        list.innerHTML = '<p class="empty-state">No accounts yet.</p>';
+        return;
+    }
+    list.innerHTML = knownAccounts.map(a => `
+        <div class="account-row">
+            <div>
+                <strong>${a.name}</strong>
+                <div class="account-type-label">${a.account_type.replace('_', ' ')}</div>
+            </div>
+            <div class="account-row-actions">
+                <button class="btn btn-small btn-secondary" onclick="renameAccount('${a.id}', '${a.name.replace(/'/g, "\\'")}')">Rename</button>
+                <button class="btn btn-small btn-danger" onclick="removeAccount('${a.id}')">Delete</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function renameAccount(id, currentName) {
+    const name = prompt('Account name', currentName);
+    if (!name || name.trim() === currentName) return;
+    await eel.update_account(id, name.trim(), null)();
+    await refreshAccounts();
+    await loadAccountsTab();
+    await loadDashboard();
+}
+
+async function removeAccount(id) {
+    if (!confirm('Delete this account? Transactions keep their account tag.')) return;
+    await eel.delete_account(id)();
+    await refreshAccounts();
+    await loadAccountsTab();
+}
+
+async function loadCreditCardsMonthly() {
+    const container = document.getElementById('credit-cards-monthly');
+    if (!container) return;
+    try {
+        const data = await eel.get_credit_card_monthly()();
+        const cards = data.cards || [];
+        if (!cards.length) {
+            container.innerHTML = '<p class="empty-state">Add credit card accounts under Accounts, then import statements tagged to those cards.</p>';
+            return;
+        }
+        container.innerHTML = cards.map(card => {
+            const months = (card.months || []).slice().reverse();
+            const rows = months.length
+                ? months.map(m => `
+                    <tr>
+                        <td>${m.year}-${String(m.month).padStart(2, '0')}</td>
+                        <td class="expense">${formatCurrency(m.total_expenses)}</td>
+                        <td>${m.transaction_count}</td>
+                    </tr>
+                `).join('')
+                : '<tr><td colspan="3" class="empty-state">No transactions yet</td></tr>';
+            return `
+                <div class="credit-card-panel">
+                    <h3>${card.account.name}</h3>
+                    <p class="card-total">Total spend: <strong>${formatCurrency(card.total_expenses)}</strong> · ${card.transaction_count} txns</p>
+                    <table class="card-month-table">
+                        <thead><tr><th>Month</th><th>Spend</th><th>Txns</th></tr></thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+        }).join('');
+    } catch (error) {
+        console.error(error);
+        container.innerHTML = `<p class="empty-state">Error: ${error.message || error}</p>`;
+    }
+}
 
