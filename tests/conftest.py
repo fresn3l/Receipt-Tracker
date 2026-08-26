@@ -1,16 +1,23 @@
 import os
 import tempfile
+from pathlib import Path
 
 _fd, _test_db = tempfile.mkstemp(suffix=".db")
 os.close(_fd)
-os.environ.setdefault("RECEIPT_TRACKER_DB", _test_db)
+os.environ["RECEIPT_TRACKER_DB"] = _test_db
+os.environ["FINANCE_APP_DATA_DIR"] = tempfile.mkdtemp(prefix="finance-app-test-")
+
+import sys
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "packages"))
 
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.database import Base, engine
-from backend.main import app
-from backend.migrations import run_migrations
+from receipts.database import Base, engine
+from receipts.migrations import run_migrations
+from app.server import create_app
 
 SAMPLE_IMPORT = {
     "products": [
@@ -67,7 +74,7 @@ def reset_db():
 
 @pytest.fixture
 def client():
-    with TestClient(app) as test_client:
+    with TestClient(create_app()) as test_client:
         yield test_client
 
 

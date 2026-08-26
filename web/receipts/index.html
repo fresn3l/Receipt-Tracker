@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#5eead4" />
+    <link rel="manifest" href="/receipts/static/manifest.json" />
+    <title>Receipt Tracker</title>
+    <link rel="stylesheet" href="/receipts/static/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <header>
+      <div class="header-row">
+        <div>
+          <h1>Receipt Tracker</h1>
+          <p>Upload receipts, track prices, and manage grocery spending.</p>
+        </div>
+        <nav class="app-nav" aria-label="Main views">
+          <button type="button" class="nav-btn active" data-view="receipts">Receipts</button>
+          <button type="button" class="nav-btn" data-view="prices">Price Tracker</button>
+          <button type="button" class="nav-btn" data-view="spending">Spending</button>
+        </nav>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel sidebar">
+        <div id="sidebar-receipts">
+          <h2>Upload receipt</h2>
+          <form id="upload-form">
+            <input type="file" id="receipt-file" accept="image/*" capture="environment" multiple />
+            <button type="submit" id="upload-btn">Parse &amp; save</button>
+          </form>
+          <p id="upload-status" class="status"></p>
+          <div class="inline-actions wrap">
+            <button type="button" id="review-queue-btn" class="secondary small">Needs review</button>
+            <button type="button" id="bulk-reparse-btn" class="secondary small">Bulk re-parse</button>
+            <a class="button-link secondary small" href="/api/export/csv">Export CSV</a>
+            <a class="button-link secondary small" href="/api/export/json" target="_blank">Export JSON</a>
+          </div>
+          <form id="import-form" class="import-form">
+            <label class="import-label">
+              Import JSON backup
+              <input type="file" id="import-file" accept="application/json,.json" />
+            </label>
+            <label class="import-check">
+              <input type="checkbox" id="import-replace" /> Replace existing data
+            </label>
+            <button type="submit" class="secondary small">Import</button>
+          </form>
+          <h2>Receipts</h2>
+          <ul id="receipt-list" class="list"></ul>
+        </div>
+
+        <div id="sidebar-prices" class="hidden">
+          <h2>Track prices</h2>
+          <div id="alerts-panel" class="alerts-panel hidden"></div>
+          <h3 class="subheading">Watchlist</h3>
+          <ul id="watchlist" class="list compact-list"></ul>
+          <input type="search" id="product-search" placeholder="Search groceries..." />
+          <div class="merge-toolbar">
+            <button type="button" id="merge-selected-btn" class="secondary small" disabled>Merge selected</button>
+            <button type="button" id="load-suggestions-btn" class="secondary small">Find duplicates</button>
+            <button type="button" id="ai-suggestions-btn" class="secondary small">AI suggest</button>
+          </div>
+          <ul id="merge-suggestions" class="suggestion-list"></ul>
+          <ul id="product-list" class="list product-select-list"></ul>
+        </div>
+
+        <div id="sidebar-spending" class="hidden">
+          <h2>Spending</h2>
+          <p class="meta">Budgets, category breakdown, and monthly trends.</p>
+        </div>
+      </section>
+
+      <section class="panel main-panel">
+        <div id="empty-state">
+          <h2 id="empty-title">Select a receipt</h2>
+          <p id="empty-text">Choose a receipt from the list or upload a new one.</p>
+        </div>
+
+        <div id="receipt-detail" class="hidden">
+          <div class="detail-header">
+            <div class="detail-info">
+              <div id="detail-view">
+                <h2 id="detail-store">Store</h2>
+                <p id="detail-meta"></p>
+                <p id="detail-notes-view" class="meta hidden"></p>
+              </div>
+              <form id="receipt-edit-form" class="hidden edit-form">
+                <label>Store <input type="text" id="edit-store" /></label>
+                <label>Date <input type="date" id="edit-date" /></label>
+                <label>Total <input type="number" id="edit-total" step="0.01" min="0" /></label>
+                <label>Notes <input type="text" id="edit-notes" placeholder="Stock-up trip, party..." /></label>
+                <div class="inline-actions">
+                  <button type="submit">Save receipt</button>
+                  <button type="button" id="cancel-receipt-edit" class="secondary">Cancel</button>
+                </div>
+              </form>
+            </div>
+            <img id="detail-image" alt="Receipt preview" />
+          </div>
+
+          <div id="duplicate-banner" class="validation-banner hidden"></div>
+          <div id="review-banner" class="validation-banner hidden"></div>
+          <div id="validation-banner" class="validation-banner hidden"></div>
+
+          <div class="toolbar">
+            <button type="button" id="edit-receipt-btn" class="secondary">Edit receipt</button>
+            <button type="button" id="toggle-items-edit-btn" class="secondary">Edit all items</button>
+            <button type="button" id="mark-reviewed-btn" class="secondary">Mark reviewed</button>
+            <button type="button" id="reparse-btn" class="secondary">Re-parse</button>
+            <button type="button" id="delete-receipt-btn" class="danger">Delete receipt</button>
+          </div>
+
+          <table>
+            <thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th><th></th></tr></thead>
+            <tbody id="detail-items"></tbody>
+          </table>
+
+          <form id="add-item-form" class="add-item-form">
+            <h3>Add line item</h3>
+            <div class="add-item-grid">
+              <input type="text" id="new-item-name" placeholder="Item name" required />
+              <input type="number" id="new-item-qty" placeholder="Qty" value="1" step="0.01" min="0" required />
+              <input type="number" id="new-item-unit" placeholder="Unit $" step="0.01" min="0" />
+              <input type="number" id="new-item-total" placeholder="Line $" step="0.01" min="0" />
+              <button type="submit">Add</button>
+            </div>
+          </form>
+        </div>
+
+        <div id="product-panel" class="hidden">
+          <div class="product-header">
+            <div>
+              <h2 id="product-title">Product</h2>
+              <p id="product-subtitle" class="meta"></p>
+            </div>
+            <div class="inline-actions">
+              <button type="button" id="toggle-watch-btn" class="secondary small">☆ Watch</button>
+              <button type="button" id="back-to-receipt" class="secondary hidden">← Back</button>
+            </div>
+          </div>
+
+          <form id="category-form" class="category-form">
+            <label>Category <select id="product-category"></select></label>
+            <button type="submit" class="secondary small">Save category</button>
+          </form>
+
+          <form id="unit-form" class="category-form">
+            <label>Package size <input type="number" id="product-unit-amount" step="0.01" min="0" placeholder="16" /></label>
+            <label>Unit
+              <select id="product-normalized-unit">
+                <option value="">—</option>
+                <option value="oz">oz</option>
+                <option value="lb">lb</option>
+                <option value="each">each</option>
+                <option value="L">L</option>
+              </select>
+            </label>
+            <button type="submit" class="secondary small">Save unit</button>
+          </form>
+
+          <div class="inline-actions wrap">
+            <button type="button" id="chart-raw-btn" class="secondary small active">Shelf price</button>
+            <button type="button" id="chart-unit-btn" class="secondary small">Per-unit price</button>
+          </div>
+
+          <div id="stats-grid" class="stats-grid"></div>
+          <div class="chart-wrap"><canvas id="price-chart"></canvas></div>
+
+          <h3>Compare by store</h3>
+          <table>
+            <thead><tr><th>Store</th><th>Buys</th><th>Avg</th><th>Latest</th></tr></thead>
+            <tbody id="store-comparison-rows"></tbody>
+          </table>
+
+          <h3>Price changes</h3>
+          <table>
+            <thead><tr><th>Period</th><th>From</th><th>To</th><th>Change</th></tr></thead>
+            <tbody id="change-rows"></tbody>
+          </table>
+
+          <h3>Purchase history</h3>
+          <table>
+            <thead><tr><th>Date</th><th>Price</th><th>Qty</th><th>Receipt</th></tr></thead>
+            <tbody id="history-rows"></tbody>
+          </table>
+        </div>
+
+        <div id="spending-panel" class="hidden">
+          <h2>Spending overview</h2>
+          <form id="budget-form" class="budget-form">
+            <label>Monthly budget <input type="number" id="monthly-budget" step="1" min="0" placeholder="400" /></label>
+            <button type="submit" class="secondary small">Save budget</button>
+          </form>
+          <div id="spending-stats" class="stats-grid"></div>
+          <div class="spending-charts">
+            <div class="chart-card">
+              <h3>By category</h3>
+              <div class="chart-wrap short"><canvas id="category-chart"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h3>By store</h3>
+              <div class="chart-wrap short"><canvas id="store-chart"></canvas></div>
+            </div>
+          </div>
+          <div class="chart-card">
+            <h3>Monthly grocery spend</h3>
+            <div class="chart-wrap"><canvas id="monthly-chart"></canvas></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/receipts/static/app.js"></script>
+  </body>
+</html>

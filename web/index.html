@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Finance App</title>
+    <link rel="stylesheet" href="/assets/shell.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <aside class="shell-nav" aria-label="App sections">
+      <div class="brand">
+        <span class="brand-mark">F</span>
+        <span class="brand-name">Finance</span>
+      </div>
+      <nav>
+        <button type="button" class="nav-item active" data-panel="dashboard">Dashboard</button>
+        <button type="button" class="nav-item" data-panel="banking">Banking</button>
+        <button type="button" class="nav-item" data-panel="receipts">Receipts</button>
+        <button type="button" class="nav-item" data-panel="settings">Settings</button>
+      </nav>
+      <p class="nav-footnote">Local-only · macOS</p>
+    </aside>
+
+    <main class="shell-main">
+      <section id="panel-dashboard" class="panel active">
+        <header class="panel-header">
+          <h1>Dashboard</h1>
+          <p>Bank spending and grocery totals at a glance.</p>
+        </header>
+        <div class="dash-grid">
+          <article class="dash-card">
+            <h2>Banking</h2>
+            <dl>
+              <div><dt>Income</dt><dd id="dash-income">—</dd></div>
+              <div><dt>Expenses</dt><dd id="dash-expenses">—</dd></div>
+              <div><dt>Net</dt><dd id="dash-net">—</dd></div>
+            </dl>
+            <button type="button" class="text-link" data-goto="banking">Open banking →</button>
+          </article>
+          <article class="dash-card">
+            <h2>Grocery receipts</h2>
+            <dl>
+              <div><dt>Receipts</dt><dd id="dash-receipt-count">—</dd></div>
+              <div><dt>Total spent</dt><dd id="dash-grocery-total">—</dd></div>
+              <div><dt>Avg trip</dt><dd id="dash-grocery-avg">—</dd></div>
+            </dl>
+            <button type="button" class="text-link" data-goto="receipts">Open receipts →</button>
+          </article>
+        </div>
+      </section>
+
+      <section id="panel-banking" class="panel panel-frame">
+        <iframe title="Banking" src="/banking/"></iframe>
+      </section>
+
+      <section id="panel-receipts" class="panel panel-frame">
+        <iframe title="Receipts" src="/receipts/"></iframe>
+      </section>
+
+      <section id="panel-settings" class="panel">
+        <header class="panel-header">
+          <h1>Settings</h1>
+          <p>API keys and data location for this Mac app.</p>
+        </header>
+        <form id="settings-form" class="settings-form">
+          <label>
+            OpenAI API key (receipt parsing)
+            <input type="password" id="openai-key" autocomplete="off" placeholder="sk-…" />
+          </label>
+          <p class="hint" id="key-status"></p>
+          <label>
+            OpenAI model
+            <input type="text" id="openai-model" value="gpt-4o-mini" />
+          </label>
+          <label>
+            Data directory
+            <input type="text" id="data-dir" readonly />
+          </label>
+          <button type="submit">Save settings</button>
+          <p class="hint" id="settings-msg"></p>
+        </form>
+      </section>
+    </main>
+
+    <script src="/assets/shell.js"></script>
+  </body>
+</html>

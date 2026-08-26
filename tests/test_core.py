@@ -1,12 +1,12 @@
 from datetime import date
 
-from backend.analytics import compute_product_analytics
-from backend.receipt_service import needs_review, mark_receipt_reviewed, build_receipt_detail
-from backend.schemas import PricePoint
-from backend.validation import validate_receipt
-from backend.models import LineItem, Receipt
-from backend.import_service import import_json_data, IMPORTED_IMAGE_PLACEHOLDER
-from backend.store_service import normalize_store_name
+from receipts.analytics import compute_product_analytics
+from receipts.receipt_service import needs_review, mark_receipt_reviewed, build_receipt_detail
+from receipts.schemas import PricePoint
+from receipts.validation import validate_receipt
+from receipts.models import LineItem, Receipt
+from receipts.import_service import import_json_data, IMPORTED_IMAGE_PLACEHOLDER
+from receipts.store_service import normalize_store_name
 
 
 def test_validate_receipt_mismatch():
@@ -43,8 +43,8 @@ def test_mark_reviewed_clears_queue_flag():
 def test_import_json_merge():
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
-    from backend.database import Base
-    from backend.models import Product, Receipt
+    from receipts.database import Base
+    from receipts.models import Product, Receipt
 
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
